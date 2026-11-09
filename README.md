@@ -1,107 +1,63 @@
-# LifeTime frontend
+# LifeTime
 
-LifeTime is a light-themed personal and social scheduling application. It combines a calendar, tasks, friends, groups, deterministic shared-availability search, and a Premium scheduling assistant.
+Календар і соціальне планування: React 19 + TypeScript + Vite + Tailwind у корені, Express + Prisma + PostgreSQL у backend/. Дизайн існуючого frontend збережено; окремий frontend не створювався.
 
-This repository currently contains the React frontend and local demo adapters. It does not contain a production authentication system, backend, database, AWS credentials, or payment processing.
+Працюють REST API для профілю, подій, завдань, друзів, груп, спільної зайнятості, сповіщень, аватарів, Premium-заявок і ручного admin review. API-режим типовий; він не підміняє помилки localStorage-даними. `VITE_DATA_MODE=demo` явно вмикає старий прототип.
 
-## Technology
+## Запуск
 
-- React 19 and TypeScript
-- Vite
-- Tailwind CSS 4 and project CSS
-- Browser `localStorage` for non-sensitive demo records
-- IndexedDB adapter for local avatar and Premium screenshot previews
-
-## Local development
-
-Requirements are defined in `.mise.toml`. With Node.js installed:
+Потрібні Node.js 22.12+ (перевірено 24), npm, PostgreSQL 16/17.
 
 ```bash
 npm install
+npm install --prefix backend
+cp .env.example .env.local
+cp backend/.env.example backend/.env
+```
+
+Створіть окрему PostgreSQL базу й налаштуйте backend/.env: DATABASE_URL, NODE_ENV=development, DEV_IDENTITY_ENABLED=true (лише локально), FRONTEND_ORIGIN. Детальні кроки встановлення PostgreSQL та приклади: [local-development.md](docs/local-development.md).
+
+```bash
+npm run db:generate
+npm run db:migrate
+npm run db:seed
+npm run dev:backend
+# в іншому терміналі
 npm run dev
 ```
 
-The Figma Make environment starts the development server automatically. Do not start a second server there.
+У Figma Make використовуйте вже запущений Vite. Backend типовий порт 3001, Vite — 5173. CORS origin має точно збігатися. Для локального входу використовуйте `olesia@lifetime.local`, `sofia@lifetime.local`, `solomia@lifetime.local`, `andrii@lifetime.local` або `admin@lifetime.local` після seed. Паролів немає. Нові локальні акаунти можна зареєструвати через onboarding; їм надаються лише user/free права. Seed недеструктивний. Після Prisma generate/migrate перезапустіть backend.
 
-Production build:
+## Перевірки
 
 ```bash
+npm run typecheck
 npm run build
-npx tsc --noEmit
+npm run build:backend
+npm test
 ```
 
-Environment variables are optional in demo mode. Copy `.env.example` to `.env.local` only when configuration is available.
+Persistence/API integration tests потребують окремої мігрованої тестової PostgreSQL:
 
-## Current demo features
-
-- Public landing, registration, login, callback, protected-route experience, and logout
-- Calendar event creation, editing, deletion, and persistent demo records
-- Tasks, friends, groups, notifications, and settings
-- Deterministic Find Free Time calculations from seeded and user-created events
-- Profile editing and validated avatar preview/upload through a browser storage adapter
-- Premium request screenshot upload and explicitly simulated administrator review
-- Rule-based Premium assistant; no LLM is connected
-
-Demo authentication stores only a small session identity in `sessionStorage`. It does not store or verify passwords. Browser route guards demonstrate intended UX and are not a security boundary.
-
-## Integration boundaries
-
-### Authentication
-
-`src/auth/AuthProvider.tsx` defines the `AuthAdapter` boundary. The production adapter should use an established OIDC library with Amazon Cognito Managed Login and Authorization Code Flow with PKCE. Cognito will own email/password registration, email verification, Google federation, tokens, callback handling, and logout.
-
-Expected configuration:
-
-- `VITE_COGNITO_AUTHORITY`
-- `VITE_COGNITO_CLIENT_ID`
-- `VITE_COGNITO_REDIRECT_URI`
-- `VITE_COGNITO_LOGOUT_URI`
-
-Never add a Google client secret, Cognito client secret, or AWS credentials to the frontend.
-
-### API
-
-`src/services/apiClient.ts` is the centralized HTTP boundary. A production token provider will attach the Cognito access token. Configure the API origin with `VITE_API_BASE_URL`; do not hardcode service URLs in components.
-
-### Files
-
-`src/services/avatarService.ts` and `src/services/premiumRequestService.ts` are replaceable adapters. Production uploads should:
-
-1. Request authorization from the authenticated backend.
-2. Receive a short-lived Amazon S3 presigned URL.
-3. Upload directly to S3.
-4. Let the backend persist only the object reference.
-
-Premium submission will use `POST /api/premium/requests`. The backend should store evidence privately and trigger an Amazon SES administrator notification containing request details and a secure authenticated review link—not public image URLs.
-
-### Premium authorization
-
-Frontend locking is only presentational. The future API must verify Premium entitlement and administrator role independently for every protected operation.
-
-## Planned AWS architecture
-
-- Static frontend assets: Amazon S3 and CloudFront
-- Authentication: Amazon Cognito
-- Backend: independently deployable API on ECS/Fargate, Lambda, or another compatible service
-- Database: selected during backend implementation
-- Private file storage: Amazon S3
-- Email: Amazon SES
-- Infrastructure: Terraform or another agreed IaC tool
-
-The frontend remains a static Vite build and does not require Docker for local work. Container and infrastructure files should be added only when deployment requirements are finalized.
-
-## Project organization
-
-```text
-src/
-  auth/        authentication state and adapters
-  components/  reusable UI
-  pages/       application screens
-  services/    API, file, and Premium integration boundaries
-  data.ts      seeded demo data
-  store.tsx    local prototype state
-  types.ts     shared domain types
-  config.ts    centralized environment configuration
+```bash
+cd backend
+NODE_ENV=test DEV_IDENTITY_ENABLED=true RUN_DB_TESTS=true DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/lifetime_test npm test
 ```
 
-Keep secrets out of Git, preserve Ukrainian interface copy, and add backend integrations behind the existing service interfaces.
+Без RUN_DB_TESTS integration test явно пропускається. Не запускайте їх на production. У тестовій БД залишаються записи з унікальними тестовими email.
+
+## Межі готовності
+
+Локальна авторизація — development adapter, не production authentication. Cognito email/password/Google/PKCE та provisioning verified identities має підключити AWS teammate. Без verifier production API відхиляє токени. S3 і SES підготовлені через контракти; файли зараз локальні, листи лише в БД outbox. Реальний AI не реалізовано; його UI збережено з явним повідомленням про відсутню інтеграцію.
+
+Повторювані події ще не реалізовані. Форма підтримує дати початку й завершення; багатоденні події відображаються по днях. Task sessions впливають на пошук і відображаються в календарі як проєкція завдання, без дублювання в БД. Частина налаштувань вигляду календаря залишається станом сесії. Автоматичне очищення невикористаних файлів, production observability та email worker ще потрібні. Browser/UI end-to-end перевірка залежить від наявності браузера; результати перевірок дивіться у docs/verification.md.
+
+## Документація
+
+- [REST endpoints та приклади](docs/api.md)
+- [Моделі, міграції та seed](docs/database.md)
+- [Локальний запуск і типові помилки](docs/local-development.md)
+- [Контракти Cognito, S3, SES, AI](docs/integration-guide.md)
+- [Фактичні перевірки та обмеження](docs/verification.md)
+
+Секрети й local uploads ігноруються Git. AWS infrastructure, deployment, push/merge та real LLM integration до цієї реалізації не входять.
