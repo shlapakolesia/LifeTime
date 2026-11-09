@@ -1,39 +1,79 @@
-import { appConfig } from '../config'
-import type { ApiErrorShape } from '../types'
+import { readSession } from "../auth/session";
+import { appConfig } from "../config";
+import type { ApiErrorShape } from "../types";
 
 export class ApiClientError extends Error implements ApiErrorShape {
-  status: number
-  code: ApiErrorShape['code']
-  constructor(status: number, code: ApiErrorShape['code'], message: string) {
-    super(message)
-    this.status = status
-    this.code = code
+  status: number;
+  code: ApiErrorShape["code"];
+  constructor(status: number, code: ApiErrorShape["code"], message: string) {
+    super(message);
+    this.status = status;
+    this.code = code;
   }
 }
 
 export interface TokenProvider {
-  getAccessToken(): Promise<string | null>
+  getAccessToken(): Promise<string | null>;
 }
 
 export class ApiClient {
-  constructor(private readonly tokenProvider: TokenProvider, private readonly baseUrl = appConfig.apiBaseUrl) {}
+  constructor(
+    private readonly tokenProvider: TokenProvider,
+    private readonly baseUrl = appConfig.apiBaseUrl,
+  ) {}
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    if (!this.baseUrl) throw new ApiClientError(0, 'network', 'API ще не підключено.')
-    const token = await this.tokenProvider.getAccessToken()
+    if (!this.baseUrl) throw new ApiClientError(0, "network", "API ще не підключено.");
+    const token = await this.tokenProvider.getAccessToken();
     try {
       const response = await fetch(`${this.baseUrl}${path}`, {
         ...init,
-        headers: { ...(init.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...init.headers },
-      })
+        headers: {
+          ...(init.body instanceof FormData ? {} : { "Content-Type": "application/json" }),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          ...init.headers,
+        },
+      });
       if (!response.ok) {
-        const code = response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden' : response.status >= 500 ? 'server' : 'validation'
-        throw new ApiClientError(response.status, code, 'Не вдалося виконати запит.')
+        const code =
+          response.status === 401
+            ? "unauthorized"
+            : response.status === 403
+              ? "forbidden"
+              : response.status >= 500
+                ? "server"
+                : "validation";
+        const body = await response.json().catch(() => null);
+        throw new ApiClientError(
+          response.status,
+          code,
+          typeof body?.message === "string" && /[а-яіїєґ]/i.test(body.message)
+            ? body.message
+            : response.status === 401
+              ? "Не вдалося увійти. Перевірте акаунт або зареєструйтеся."
+              : "Не вдалося виконати запит. Спробуйте ще раз.",
+        );
       }
-      return response.status === 204 ? undefined as T : response.json()
+      return response.status === 204 ? (undefined as T) : response.json();
     } catch (error) {
-      if (error instanceof ApiClientError) throw error
-      throw new ApiClientError(0, 'network', 'Перевірте з’єднання з мережею.')
+      if (error instanceof ApiClientError) throw error;
+      throw new ApiClientError(0, "network", "Перевірте з’єднання з мережею.");
     }
   }
+}
+
+// One token provider is shared by JSON and authenticated file requests.
+export const tokenProvider: TokenProvider = {
+  async getAccessToken() {
+    return readSession(sessionStorage)?.token || null;
+  },
+};
+export const api = new ApiClient(tokenProvider);
+export async function privateImage(id: string): Promise<string> {
+  const token = await tokenProvider.getAccessToken();
+  const response = await fetch(`${appConfig.apiBaseUrl}/api/uploads/${id}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!response.ok) throw new Error("Не вдалося завантажити зображення.");
+  return URL.createObjectURL(await response.blob());
 }

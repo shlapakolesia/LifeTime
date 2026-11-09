@@ -1,0 +1,191 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+model User {
+  id String @id @default(uuid()) @db.Uuid
+  subject String @unique
+  email String @unique
+  accountRole String @default("user")
+  premiumStatus String @default("free")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  developmentSessions DevelopmentSession[]
+  profile UserProfile?
+  events CalendarEvent[]
+  participations EventParticipant[]
+  tasks Task[]
+  sentRequests FriendRequest[] @relation("sender")
+  receivedRequests FriendRequest[] @relation("recipient")
+  friendships Friendship[] @relation("friendOwner")
+  friendOf Friendship[] @relation("friendTarget")
+  groups Group[]
+  memberships GroupMember[]
+  notifications Notification[]
+  premiumRequests PremiumRequest[]
+  uploads UploadedFile[]
+}
+model UserProfile {
+  userId String @id @db.Uuid
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  firstName String
+  lastName String
+  bio String @default("")
+  timezone String @default("Europe/Kyiv")
+  activeStart String @default("08:00")
+  activeEnd String @default("21:00")
+  sharing String @default("busy")
+  avatarId String? @unique @db.Uuid
+  avatar UploadedFile? @relation("avatar",fields:[avatarId],references:[id],onDelete:SetNull)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model CalendarEvent {
+  id String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
+  owner User @relation(fields:[ownerId],references:[id],onDelete:Cascade)
+  title String
+  description String @default("")
+  startsAt DateTime @db.Timestamptz(3)
+  endsAt DateTime @db.Timestamptz(3)
+  timezone String
+  category String @default("Особисте")
+  location String @default("")
+  privacy String @default("private")
+  participants EventParticipant[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([ownerId,startsAt,endsAt])
+}
+model EventParticipant {
+  eventId String @db.Uuid
+  userId String @db.Uuid
+  event CalendarEvent @relation(fields:[eventId],references:[id],onDelete:Cascade)
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@id([eventId,userId])
+  @@index([userId])
+}
+model Task {
+  id String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
+  owner User @relation(fields:[ownerId],references:[id],onDelete:Cascade)
+  title String
+  description String @default("")
+  deadline DateTime? @db.Timestamptz(3)
+  priority String @default("Середній")
+  completed Boolean @default(false)
+  estimatedMinutes Int?
+  scheduledStart DateTime? @db.Timestamptz(3)
+  scheduledEnd DateTime? @db.Timestamptz(3)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([ownerId,deadline])
+}
+model FriendRequest {
+  id String @id @default(uuid()) @db.Uuid
+  senderId String @db.Uuid
+  recipientId String @db.Uuid
+  sender User @relation("sender",fields:[senderId],references:[id],onDelete:Cascade)
+  recipient User @relation("recipient",fields:[recipientId],references:[id],onDelete:Cascade)
+  status String @default("pending")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([recipientId,status])
+}
+model Friendship {
+  ownerId String @db.Uuid
+  friendId String @db.Uuid
+  owner User @relation("friendOwner",fields:[ownerId],references:[id],onDelete:Cascade)
+  friend User @relation("friendTarget",fields:[friendId],references:[id],onDelete:Cascade)
+  shareAvailability Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@id([ownerId,friendId])
+}
+model Group {
+  id String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
+  owner User @relation(fields:[ownerId],references:[id],onDelete:Cascade)
+  name String
+  description String @default("")
+  members GroupMember[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model GroupMember {
+  groupId String @db.Uuid
+  userId String @db.Uuid
+  group Group @relation(fields:[groupId],references:[id],onDelete:Cascade)
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@id([groupId,userId])
+  @@index([userId])
+}
+model Notification {
+  id String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  type String
+  title String
+  text String
+  read Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId,createdAt])
+}
+model PremiumRequest {
+  id String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  firstName String
+  lastName String
+  accountEmail String
+  screenshotId String @unique @db.Uuid
+  screenshot UploadedFile @relation(fields:[screenshotId],references:[id],onDelete:Restrict)
+  status String @default("pending")
+  reviewedBy String?
+  reviewNotes String?
+  reviewedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([status,createdAt])
+}
+model UploadedFile {
+  id String @id @default(uuid()) @db.Uuid
+  ownerId String @db.Uuid
+  owner User @relation(fields:[ownerId],references:[id],onDelete:Cascade)
+  key String @unique
+  mimeType String
+  size Int
+  purpose String
+  profile UserProfile? @relation("avatar")
+  premiumRequest PremiumRequest?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model OutgoingEmail {
+  id String @id @default(uuid()) @db.Uuid
+  recipient String
+  subject String
+  text String
+  status String @default("queued")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DevelopmentSession {
+  id String @id @default(uuid()) @db.Uuid
+  tokenHash String @unique
+  userId String @db.Uuid
+  user User @relation(fields:[userId],references:[id],onDelete:Cascade)
+  expiresAt DateTime @db.Timestamptz(3)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId])
+}

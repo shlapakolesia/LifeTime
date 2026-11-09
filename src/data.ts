@@ -14,7 +14,7 @@ export const addDays = (amount: number) => {
 }
 export const dateFromIso = (value: string) => new Date(`${value}T12:00:00`)
 export const formatDate = (value: string, options: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'long' }) =>
-  new Intl.DateTimeFormat('uk-UA', options).format(dateFromIso(value))
+  value ? new Intl.DateTimeFormat('uk-UA', options).format(dateFromIso(value)) : 'Без дедлайну'
 export const weekday = (value: string) => new Intl.DateTimeFormat('uk-UA', { weekday: 'long' }).format(dateFromIso(value))
 export const minutes = (time: string) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3))
 export const timeFromMinutes = (value: number) => `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`
