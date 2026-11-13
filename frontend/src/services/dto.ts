@@ -59,7 +59,7 @@ export function userDto(u: UserDto, self?: string): User {
     firstName: u.profile.firstName,
     lastName: u.profile.lastName,
     email: u.email || "",
-    initials: `${u.profile.firstName[0]}${u.profile.lastName[0]}`,
+    initials: `${u.profile.firstName[0] ?? ""}${u.profile.lastName[0] ?? ""}`.toUpperCase(),
     color: "#7057d8",
     role: "",
     activeStart: u.profile.activeStart,

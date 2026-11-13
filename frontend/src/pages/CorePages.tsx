@@ -1,5 +1,5 @@
 import { calendarEntries, onCalendarDate } from "../services/calendarView";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { addDays, dateFromIso, formatDate, iso, minutes, timeFromMinutes, weekday } from "../data";
 import { useStore } from "../store";
 import type { CalendarEvent, CalendarView, Task } from "../types";
@@ -15,6 +15,19 @@ const eventColor: Record<string, string> = {
   Інше: "#718096",
 };
 
+/** Current minutes since midnight; ticks every 30 s so "next event" stays accurate. */
+function useNowMinutes() {
+  const read = () => new Date().getHours() * 60 + new Date().getMinutes();
+  const [now, setNow] = useState(read);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(read()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return now;
+}
+const untilText = (diff: number) =>
+  diff >= 60 ? `Ще ${Math.floor(diff / 60)} год${diff % 60 ? ` ${diff % 60} хв` : ""} до початку` : `Ще ${diff} хв до початку`;
+
 export function Overview({
   navigate,
   openEvent,
@@ -25,6 +38,7 @@ export function Overview({
   openTask: () => void;
 }) {
   const { events: storedEvents, tasks, users, notifications, currentUser } = useStore();
+  const nowMinutes = useNowMinutes();
   const events = calendarEntries(
     storedEvents,
     tasks,
@@ -36,6 +50,8 @@ export function Overview({
     .map((e) => onCalendarDate(e, today))
     .filter((e): e is CalendarEvent => Boolean(e))
     .sort((a, b) => a.start.localeCompare(b.start));
+  // First event of today that has not finished yet (ongoing or upcoming).
+  const nextEvent = todayEvents.find((e) => minutes(e.end) > nowMinutes);
   const openTasks = tasks
     .filter((t) => !t.completed)
     .sort((a, b) => a.deadline.localeCompare(b.deadline));
@@ -142,23 +158,19 @@ export function Overview({
         <aside className="overview-side">
           <section className="card next-card">
             <div className="eyebrow">Далі за планом</div>
-            {todayEvents[0] ? (
+            {nextEvent ? (
               <>
-                <div className="next-time">{todayEvents[0].start}</div>
-                <h3>{todayEvents[0].title}</h3>
-                <p>{todayEvents[0].location || todayEvents[0].category}</p>
+                <div className="next-time">{nextEvent.start}</div>
+                <h3>{nextEvent.title}</h3>
+                <p>{nextEvent.location || nextEvent.category}</p>
                 <div className="next-line">
-                  <span style={{ background: eventColor[todayEvents[0].category] }} />
+                  <span style={{ background: eventColor[nextEvent.category] }} />
                   <div />
                 </div>
                 <small>
-                  Ще{" "}
-                  {Math.max(
-                    1,
-                    minutes(todayEvents[0].start) -
-                      (new Date().getHours() * 60 + new Date().getMinutes()),
-                  )}{" "}
-                  хв до початку
+                  {minutes(nextEvent.start) <= nowMinutes
+                    ? `Триває зараз · до ${nextEvent.end}`
+                    : untilText(minutes(nextEvent.start) - nowMinutes)}
                 </small>
               </>
             ) : (

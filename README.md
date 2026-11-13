@@ -1,6 +1,6 @@
 # LifeTime
 
-Календар і соціальне планування: React 19 + TypeScript + Vite + Tailwind у корені, Express + Prisma + PostgreSQL у backend/. Дизайн існуючого frontend збережено; окремий frontend не створювався.
+Календар і соціальне планування: React 19 + TypeScript + Vite + Tailwind у frontend/, Express + Prisma + PostgreSQL у backend/. Дизайн існуючого frontend збережено.
 
 Працюють REST API для профілю, подій, завдань, друзів, груп, спільної зайнятості, сповіщень, аватарів, Premium-заявок і ручного admin review. API-режим типовий; він не підміняє помилки localStorage-даними. `VITE_DATA_MODE=demo` явно вмикає старий прототип.
 
@@ -9,9 +9,9 @@
 Потрібні Node.js 22.12+ (перевірено 24), npm, PostgreSQL 16/17.
 
 ```bash
-npm install
+npm install --prefix frontend
 npm install --prefix backend
-cp .env.example .env.local
+cp frontend/.env.example frontend/.env.local
 cp backend/.env.example backend/.env
 ```
 
@@ -23,10 +23,10 @@ npm run db:migrate
 npm run db:seed
 npm run dev:backend
 # в іншому терміналі
-npm run dev
+npm run dev   # запускає Vite з frontend/
 ```
 
-У Figma Make використовуйте вже запущений Vite. Backend типовий порт 3001, Vite — 5173. CORS origin має точно збігатися. Для локального входу використовуйте `olesia@lifetime.local`, `sofia@lifetime.local`, `solomia@lifetime.local`, `andrii@lifetime.local` або `admin@lifetime.local` після seed. Паролів немає. Нові локальні акаунти можна зареєструвати через onboarding; їм надаються лише user/free права. Seed недеструктивний. Після Prisma generate/migrate перезапустіть backend.
+Кореневий package.json містить лише скрипти-обгортки (dev, build, test тощо), які делегують у frontend/ і backend/. Backend типовий порт 3001, Vite — 5173. CORS origin має точно збігатися. Для локального входу використовуйте `olesia@lifetime.local`, `sofia@lifetime.local`, `solomia@lifetime.local`, `andrii@lifetime.local` або `admin@lifetime.local` після seed. Паролів немає. Нові локальні акаунти можна зареєструвати через onboarding; їм надаються лише user/free права. Seed недеструктивний. Після Prisma generate/migrate перезапустіть backend.
 
 ## Перевірки
 
@@ -48,7 +48,7 @@ NODE_ENV=test DEV_IDENTITY_ENABLED=true RUN_DB_TESTS=true DATABASE_URL=postgresq
 
 ## Межі готовності
 
-Локальна авторизація — development adapter, не production authentication. Cognito email/password/Google/PKCE та provisioning verified identities має підключити AWS teammate. Без verifier production API відхиляє токени. S3 і SES підготовлені через контракти; файли зараз локальні, листи лише в БД outbox. Реальний AI не реалізовано; його UI збережено з явним повідомленням про відсутню інтеграцію.
+Локальна авторизація — development adapter, не production authentication. Production-вхід через Amazon Cognito (Hosted UI, Google, PKCE, верифікація JWT, створення акаунта при першому вході) реалізовано в коді — налаштування AWS описано в [docs/cognito-setup.md](docs/cognito-setup.md). Без `COGNITO_*` змінних production API відхиляє токени. S3 і SES підготовлені через контракти; файли зараз локальні, листи лише в БД outbox. Реальний AI не реалізовано; його UI збережено з явним повідомленням про відсутню інтеграцію.
 
 Повторювані події ще не реалізовані. Форма підтримує дати початку й завершення; багатоденні події відображаються по днях. Task sessions впливають на пошук і відображаються в календарі як проєкція завдання, без дублювання в БД. Частина налаштувань вигляду календаря залишається станом сесії. Автоматичне очищення невикористаних файлів, production observability та email worker ще потрібні. Browser/UI end-to-end перевірка залежить від наявності браузера; результати перевірок дивіться у docs/verification.md.
 
@@ -57,6 +57,8 @@ NODE_ENV=test DEV_IDENTITY_ENABLED=true RUN_DB_TESTS=true DATABASE_URL=postgresq
 - [REST endpoints та приклади](docs/api.md)
 - [Моделі, міграції та seed](docs/database.md)
 - [Локальний запуск і типові помилки](docs/local-development.md)
+- [Налаштування Cognito](docs/cognito-setup.md)
+- [Деплой на AWS і оновлення](docs/aws-deploy.md)
 - [Контракти Cognito, S3, SES, AI](docs/integration-guide.md)
 - [Фактичні перевірки та обмеження](docs/verification.md)
 

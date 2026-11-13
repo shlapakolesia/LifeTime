@@ -110,6 +110,21 @@ export function RemoteStoreProvider({ children }: { children: ReactNode }) {
       live = false;
     };
   }, [isAuthenticated, identity?.email]);
+  // Pull invitations and calendar changes made by other users without a manual reload.
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const poll = () => {
+      if (!document.hidden) refreshRef.current().catch(() => undefined);
+    };
+    const timer = window.setInterval(poll, 30000);
+    document.addEventListener("visibilitychange", poll);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", poll);
+    };
+  }, [isAuthenticated, identity?.email]);
   async function mutate(work: () => Promise<unknown>) {
     setError("");
     try {

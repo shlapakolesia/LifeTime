@@ -9,7 +9,8 @@ import { FindTimePage, FriendsPage, GroupsPage } from "./pages/FeaturePages";
 import { AssistantPage, NotificationsPage, SettingsPage } from "./pages/MiscPages";
 import { AdminPage, LandingPage, PremiumPage } from "./pages/PublicAndPremium";
 import { AuthProvider, useAuth } from "./auth/AuthProvider";
-import { apiMode, isCognitoConfigured } from "./config";
+import { apiMode, isCognitoConfigured, usesCognito } from "./config";
+import { cognito } from "./auth/cognito";
 
 const nav: { id: Page; label: string; icon: string }[] = [
   { id: "overview", label: "Огляд", icon: "overview" },
@@ -58,6 +59,17 @@ function Auth({
   const [form, setForm] = useState({ first: "", last: "", email: "" });
   const [activeStart, setActiveStart] = useState("08:00");
   const [activeEnd, setActiveEnd] = useState("21:00");
+  const { startCognitoLogin } = useAuth();
+  const goCognito = async (kind: "signin" | "signup", provider?: string) => {
+    setError("");
+    setLoading(true);
+    try {
+      await startCognitoLogin(kind, provider); // redirects away on success
+    } catch {
+      setError("Не вдалося відкрити сторінку входу. Спробуйте ще раз.");
+      setLoading(false);
+    }
+  };
   const finish = async () => {
     if (loading) return;
     setError("");
@@ -226,6 +238,59 @@ function Auth({
         </div>
       </section>
       <section className="auth-form-wrap">
+        {usesCognito ? (
+          <div className="auth-form">
+            <span className="eyebrow">{mode === "signup" ? "Новий початок" : "З поверненням"}</span>
+            <h2>{mode === "signup" ? "Створити акаунт" : "Увійти в LifeTime"}</h2>
+            <p>
+              {mode === "signup"
+                ? "Почни планувати життя у своєму ритмі."
+                : "Твій час і твої люди вже чекають."}
+            </p>
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
+            <Button
+              type="button"
+              className="auth-submit"
+              disabled={loading}
+              onClick={() => void goCognito(mode === "signup" ? "signup" : "signin")}
+            >
+              {loading ? "Зачекайте…" : mode === "signup" ? "Зареєструватися" : "Увійти"}
+            </Button>
+            <div className="auth-divider">
+              <span>або</span>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              className="google-button"
+              disabled={loading}
+              onClick={() => void goCognito("signin", "Google")}
+            >
+              <b>G</b>Продовжити з Google
+            </Button>
+            <p className="switch-auth">
+              {mode === "signin" ? "Ще немає акаунта?" : "Вже є акаунт?"}{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  const next = mode === "signin" ? "signup" : "signin";
+                  setMode(next);
+                  history.replaceState({}, "", next === "signup" ? "/register" : "/login");
+                }}
+              >
+                {mode === "signin" ? "Зареєструватися" : "Увійти"}
+              </button>
+            </p>
+            <button type="button" className="back-home" onClick={onBack}>
+              <Icon name="arrow" className="flip" size={14} />
+              На головну
+            </button>
+          </div>
+        ) : (
         <form className="auth-form" onSubmit={submit}>
           <span className="eyebrow">
             {mode === "signup"
@@ -355,6 +420,7 @@ function Auth({
             Flow із PKCE.
           </p>
         </form>
+        )}
       </section>
     </div>
   );
@@ -752,9 +818,10 @@ function AuthCallbackPage() {
       </span>
       <h1>Завершуємо вхід</h1>
       <p>
-        {isCognitoConfigured
-          ? "Обробляємо відповідь Amazon Cognito…"
-          : "Cognito ще не налаштовано. Скористайся локальним входом."}
+        {cognito.getCallbackError() ||
+          (isCognitoConfigured
+            ? "Обробляємо відповідь Amazon Cognito…"
+            : "Cognito ще не налаштовано. Скористайся локальним входом.")}
       </p>
       <Button
         onClick={() => {

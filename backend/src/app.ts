@@ -1,4 +1,5 @@
 import { developmentAuthRouter } from "./services/developmentAuth.js";
+import { cognitoAuthRouter } from "./services/cognitoAuth.js";
 import express from "express";
 import cors from "cors";
 import multer from "multer";
@@ -28,6 +29,8 @@ const page = (query: Record<string, unknown>) => ({
 export function createApp(verifier?: AccessTokenVerifier) {
   const app = express();
   app.disable("x-powered-by");
+  // Behind CloudFront: take the client IP from X-Forwarded-For so rate limits are per user.
+  if (config.env === "production") app.set("trust proxy", 1);
   app.use(cors({ origin: config.origin }));
   app.use(express.json({ limit: "100kb" }));
   app.use((_req, res, next) => {
@@ -40,6 +43,7 @@ export function createApp(verifier?: AccessTokenVerifier) {
     res.json({ status: "ok" });
   });
   app.use("/api/dev-auth", developmentAuthRouter());
+  app.use("/api/auth", cognitoAuthRouter(verifier));
   app.use("/api", rateLimit({ windowMs: 60000, limit: 180 }), authenticate(verifier));
   const me = (userId: string) =>
     db.user.findUniqueOrThrow({ where: { id: userId }, include: { profile: true } });
@@ -78,7 +82,8 @@ export function createApp(verifier?: AccessTokenVerifier) {
       where: {
         OR: [
           { ownerId: req.userId },
-          { participants: { some: { userId: req.userId } }, privacy: "shared" },
+          // Invited participants always see the event, whatever its privacy label.
+          { participants: { some: { userId: req.userId } } },
         ],
         ...(from ? { endsAt: { gt: from } } : {}),
         ...(to ? { startsAt: { lt: to } } : {}),
@@ -115,16 +120,37 @@ export function createApp(verifier?: AccessTokenVerifier) {
           if (busy.length) throw new HttpError(409, "Час уже зайнятий. Повторіть пошук.");
         }
         const relations = { create: participants.map((userId) => ({ userId })) };
-        return eventId
-          ? tx.calendarEvent.update({
+        const before = eventId
+          ? (await tx.eventParticipant.findMany({ where: { eventId } })).map((p) => p.userId)
+          : [];
+        const saved = eventId
+          ? await tx.calendarEvent.update({
               where: { id: eventId },
               data: { ...data, participants: { deleteMany: {}, ...relations } },
               include: { participants: true },
             })
-          : tx.calendarEvent.create({
+          : await tx.calendarEvent.create({
               data: { ...data, ownerId: userId, participants: relations },
               include: { participants: true },
             });
+        const invited = participants.filter((uid) => !before.includes(uid));
+        if (invited.length) {
+          const owner = await tx.userProfile.findUnique({ where: { userId } });
+          const when = new Intl.DateTimeFormat("uk-UA", {
+            dateStyle: "medium",
+            timeStyle: "short",
+            timeZone: data.timezone,
+          }).format(new Date(data.startsAt));
+          await tx.notification.createMany({
+            data: invited.map((uid) => ({
+              userId: uid,
+              type: "event",
+              title: "Вас запрошено на подію",
+              text: `${owner ? `${owner.firstName} ${owner.lastName}`.trim() : "Друг"} запрошує на «${data.title}» — ${when}.`,
+            })),
+          });
+        }
+        return saved;
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -136,10 +162,24 @@ export function createApp(verifier?: AccessTokenVerifier) {
     res.json(await saveEvent(req.userId, req.body, req.params.id as string)),
   );
   app.delete("/api/events/:id", async (req, res) => {
-    const result = await db.calendarEvent.deleteMany({
-      where: { id: id.parse(req.params.id), ownerId: req.userId },
+    const eventId = id.parse(req.params.id);
+    await db.$transaction(async (tx) => {
+      const event = await tx.calendarEvent.findFirst({
+        where: { id: eventId, ownerId: req.userId },
+        include: { participants: true },
+      });
+      if (!event) throw new HttpError(404, "Подію не знайдено.");
+      await tx.calendarEvent.delete({ where: { id: eventId } });
+      if (event.participants.length)
+        await tx.notification.createMany({
+          data: event.participants.map((p) => ({
+            userId: p.userId,
+            type: "event",
+            title: "Подію скасовано",
+            text: `Організатор скасував подію «${event.title}».`,
+          })),
+        });
     });
-    if (!result.count) throw new HttpError(404, "Подію не знайдено.");
     res.status(204).end();
   });
   app.get("/api/tasks", async (req, res) => {

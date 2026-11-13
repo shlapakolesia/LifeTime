@@ -7,3 +7,5 @@ dist/
 *.log
 backend/local-uploads/
 backend/coverage/
+*.pem
+*.ppk

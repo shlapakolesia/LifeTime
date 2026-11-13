@@ -1,11 +1,13 @@
 # Локальна розробка
 
-Потрібні Node.js 22.12+ (перевірено Node 24), npm і PostgreSQL 16/17. AWS не потрібен.
-Frontend залишається в корені; backend — окремий npm-проєкт.
+Локальний запуск **не потребує AWS і Cognito**: залиште `COGNITO_*` у backend/.env та `VITE_COGNITO_*` у frontend/.env.local порожніми, тоді працює локальний вхід за email із seed. Production-вхід описано в [cognito-setup.md](cognito-setup.md).
 
-1. `npm install`
+Потрібні Node.js 22.12+ (перевірено Node 24), npm і PostgreSQL 16/17. AWS не потрібен.
+Frontend — у frontend/, backend — у backend/ (окремі npm-проєкти).
+
+1. `npm install --prefix frontend`
 2. `npm install --prefix backend`
-3. `cp .env.example .env.local`
+3. `cp frontend/.env.example frontend/.env.local`
 4. `cp backend/.env.example backend/.env`
 5. Налаштуйте `DATABASE_URL` у backend/.env. Увімкніть `DEV_IDENTITY_ENABLED=true` **тільки локально**.
 6. `npm run db:generate --prefix backend`
