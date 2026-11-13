@@ -1,6 +1,6 @@
 # Деплой на AWS (як налаштовано зараз)
 
-Інфраструктура як код і скрипти: [../infra/](../infra/README.md).
+Інфраструктура як код і скрипти: [infra/README.md](../README.md).
 
 Схема: **S3 + CloudFront** (сайт і єдиний HTTPS-домен), **EC2 t3.micro** (backend + PostgreSQL), **Cognito** (вхід).
 `/api/*` у CloudFront іде на EC2 (HTTP, порт 3001), решта — на S3. Файли користувачів лежать на диску EC2 (`UPLOAD_DIR`).
