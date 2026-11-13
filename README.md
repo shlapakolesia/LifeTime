@@ -58,8 +58,9 @@ NODE_ENV=test DEV_IDENTITY_ENABLED=true RUN_DB_TESTS=true DATABASE_URL=postgresq
 - [Моделі, міграції та seed](docs/database.md)
 - [Локальний запуск і типові помилки](docs/local-development.md)
 - [Налаштування Cognito](docs/cognito-setup.md)
+- [Інфраструктура (infra/)](infra/README.md)
 - [Деплой на AWS і оновлення](docs/aws-deploy.md)
 - [Контракти Cognito, S3, SES, AI](docs/integration-guide.md)
 - [Фактичні перевірки та обмеження](docs/verification.md)
 
-Секрети й local uploads ігноруються Git. AWS infrastructure, deployment, push/merge та real LLM integration до цієї реалізації не входять.
+Секрети й local uploads ігноруються Git. Опис AWS-інфраструктури та скрипти деплою лежать у [infra/](infra/README.md); real LLM integration до цієї реалізації не входить.
