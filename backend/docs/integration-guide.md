@@ -2,7 +2,7 @@
 
 ## Cognito
 
-> Реалізовано: див. [cognito-setup.md](cognito-setup.md) (верифікатор, `/api/auth/provision`, PKCE-клієнт). Лишається створити ресурси в AWS. Опис нижче — початковий контракт.
+> Реалізовано: див. [cognito-setup.md](../../infra/docs/cognito-setup.md) (верифікатор, `/api/auth/provision`, PKCE-клієнт). Лишається створити ресурси в AWS. Опис нижче — початковий контракт.
 
 `backend/src/middleware/auth.ts`: реалізувати `AccessTokenVerifier.verify(token)` і передати в `createApp(verifier)` у server.ts. Перевіряти JWKS signature з кешуванням/rotation, точний issuer, expiry, token_use=access і app client ID. Не приймати ID token як access token. Повернути лише перевірений subject. User.subject має відповідати Cognito sub; provision/link акаунт тільки після перевірки claims (email_verified), не за довільним браузерним email.
 

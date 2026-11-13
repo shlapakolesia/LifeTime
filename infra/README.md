@@ -32,12 +32,12 @@
 5. На комп'ютері: створіть `frontend/.env.production` за шаблоном і запустіть `infra/scripts/deploy-frontend.ps1 -Bucket <SiteBucketName> -DistributionId <DistributionId>`.
 6. Зареєструйтесь на сайті, потім зробіть себе адміном: `sudo -u postgres psql lifetime -c "UPDATE \"User\" SET \"accountRole\"='admin' WHERE email='...';"`
 
-Поточний продакшн було створено вручну в консолі AWS (кроки в [docs/aws-deploy.md](../docs/aws-deploy.md)). Шаблон його не імпортує: розгортання створить окремий, паралельний стек.
+Поточний продакшн було створено вручну в консолі AWS (кроки в [docs/aws-deploy.md](docs/aws-deploy.md)). Шаблон його не імпортує: розгортання створить окремий, паралельний стек.
 
 ## Обмеження й застереження
 - Шаблон перевірено лише на синтаксис YAML. У CloudFormation його не розгортали, тож перший запуск краще робити в тестовому акаунті.
 - Домен origin для API збирається з Elastic IP за форматом `ec2-A-B-C-D.<регіон>.compute.amazonaws.com`; у `us-east-1` формат інший (`compute-1`).
 - За замовчуванням береться Ubuntu 24.04 (PostgreSQL 16, Node.js 22 з NodeSource). Живий сервер працює на Ubuntu 26.04 (PostgreSQL 18).
-- Google-вхід не входить у шаблон: його додають у Cognito вручну (див. [docs/cognito-setup.md](../docs/cognito-setup.md)).
+- Google-вхід не входить у шаблон: його додають у Cognito вручну (див. [docs/cognito-setup.md](docs/cognito-setup.md)).
 - Файли користувачів (аватарки) лежать на диску EC2 (`UPLOAD_DIR`), окремого бекапу немає.
 - Free Plan AWS діє 6 місяців або до вичерпання кредитів. Cognito безкоштовний до 10 000 активних користувачів на місяць.

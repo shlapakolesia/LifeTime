@@ -1,6 +1,6 @@
 # Локальна розробка
 
-Локальний запуск **не потребує AWS і Cognito**: залиште `COGNITO_*` у backend/.env та `VITE_COGNITO_*` у frontend/.env.local порожніми, тоді працює локальний вхід за email із seed. Production-вхід описано в [cognito-setup.md](cognito-setup.md).
+Локальний запуск **не потребує AWS і Cognito**: залиште `COGNITO_*` у backend/.env та `VITE_COGNITO_*` у frontend/.env.local порожніми, тоді працює локальний вхід за email із seed. Production-вхід описано в [cognito-setup.md](../../infra/docs/cognito-setup.md).
 
 Потрібні Node.js 22.12+ (перевірено Node 24), npm і PostgreSQL 16/17. AWS не потрібен.
 Frontend — у frontend/, backend — у backend/ (окремі npm-проєкти).
