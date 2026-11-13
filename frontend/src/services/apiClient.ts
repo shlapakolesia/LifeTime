@@ -1,5 +1,6 @@
 import { readSession } from "../auth/session";
-import { appConfig } from "../config";
+import { cognito } from "../auth/cognito";
+import { appConfig, usesCognito } from "../config";
 import type { ApiErrorShape } from "../types";
 
 export class ApiClientError extends Error implements ApiErrorShape {
@@ -65,7 +66,7 @@ export class ApiClient {
 // One token provider is shared by JSON and authenticated file requests.
 export const tokenProvider: TokenProvider = {
   async getAccessToken() {
-    return readSession(sessionStorage)?.token || null;
+    return usesCognito ? cognito.getAccessToken() : readSession(sessionStorage)?.token || null;
   },
 };
 export const api = new ApiClient(tokenProvider);

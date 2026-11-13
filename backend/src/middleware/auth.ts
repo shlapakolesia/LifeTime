@@ -5,9 +5,19 @@ import { db } from "../services/database.js";
 export interface VerifiedIdentity {
   subject: string;
 }
+/** Claims from a verified Cognito ID token; used only to provision an account on first login. */
+export interface VerifiedProfile {
+  subject: string;
+  email: string;
+  emailVerified: boolean;
+  givenName?: string;
+  familyName?: string;
+}
 /** Cognito adapter must validate signature, issuer, token_use=access, expiry and client ID. */
 export interface AccessTokenVerifier {
   verify(token: string): Promise<VerifiedIdentity>;
+  /** Validates an ID token (token_use=id, aud=client ID). Required for POST /api/auth/provision. */
+  verifyIdToken?(token: string): Promise<VerifiedProfile>;
 }
 declare global {
   namespace Express {

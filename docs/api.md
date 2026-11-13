@@ -133,3 +133,6 @@ POST `/api/dev-auth/login`: `{ "email":"new@lifetime.local" }` → той сам
 GET `/api/profile` з Bearer session token відновлює сесію. POST `/api/dev-auth/logout` відкликає поточний token → 204. Невідомі/прострочені/відкликані сесії → 401 українською.
 
 Усі dev-auth маршрути закриті поза explicitly enabled development/test, обмежені loopback-з'єднанням, дозволеним Origin і rate limit. Backend із development identity слухає лише 127.0.0.1. Це не production password/identity provider; Cognito контракт не змінено.
+
+## POST `/api/auth/provision` (Cognito)
+Заголовок `Authorization: Bearer <access token>`, тіло `{ "idToken": "...", "timezone": "Europe/Warsaw" }`. Перевіряє обидва токени (підпис, issuer, token_use, client), збіг `sub` і `email_verified`. Ідемпотентно: повертає існуючий акаунт (200) або створює новий (201) у форматі `/api/profile`. 401 — недійсні токени; 403 — email не підтверджено; 409 — email уже привʼязаний до іншого акаунта. Email та імена беруться лише з ID token.

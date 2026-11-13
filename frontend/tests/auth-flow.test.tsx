@@ -3,8 +3,8 @@ import { render, screen, waitFor, cleanup, fireEvent } from "@testing-library/re
 import userEvent from "@testing-library/user-event";
 import { randomUUID } from "node:crypto";
 import type { Server } from "node:http";
-import { createApp } from "../backend/src/app";
-import { db } from "../backend/src/services/database";
+import { createApp } from "../../backend/src/app";
+import { db } from "../../backend/src/services/database";
 import App from "../src/App";
 
 const databaseTest = process.env.RUN_DB_TESTS === "true" ? test : test.skip;

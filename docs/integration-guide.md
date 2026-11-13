@@ -1,12 +1,14 @@
 # Інтеграції команди
 
-## Cognito — AWS teammate
+## Cognito
+
+> Реалізовано: див. [cognito-setup.md](cognito-setup.md) (верифікатор, `/api/auth/provision`, PKCE-клієнт). Лишається створити ресурси в AWS. Опис нижче — початковий контракт.
 
 `backend/src/middleware/auth.ts`: реалізувати `AccessTokenVerifier.verify(token)` і передати в `createApp(verifier)` у server.ts. Перевіряти JWKS signature з кешуванням/rotation, точний issuer, expiry, token_use=access і app client ID. Не приймати ID token як access token. Повернути лише перевірений subject. User.subject має відповідати Cognito sub; provision/link акаунт тільки після перевірки claims (email_verified), не за довільним браузерним email.
 
 Production backend без verifier відхиляє токени. `DEV_IDENTITY_ENABLED` типово false; поза явно заданим NODE_ENV=development/test запуск з true завершується помилкою. Development email-only login призначений лише для приватного локального середовища. Новий frontend використовує випадкові серверні сесії з терміном 7 днів; їх hash зберігається у DevelopmentSession. Register/login/logout додатково перевіряють loopback socket і дозволений Origin. Старий dev:email підтримується лише локально для існуючих інструментів/seed тестів. Production відхиляє обидва формати.
 
-Frontend: AuthAdapter у src/auth/AuthProvider.tsx; замінити LocalAuthAdapter на Cognito adapter з Authorization Code + PKCE, state/nonce та callback/logout. Підключити той самий token provider до `api` та `privateImage` у apiClient.ts. Поточний frontend API provider читає серверний opaque development-session token; Cognito env самі по собі не активують вхід. Не зберігати client secrets/паролі; Google login проходить через Cognito. UI callback зараз є повідомленням-заглушкою, не завершеним OAuth flow.
+Frontend: AuthAdapter у frontend/src/auth/AuthProvider.tsx; замінити LocalAuthAdapter на Cognito adapter з Authorization Code + PKCE, state/nonce та callback/logout. Підключити той самий token provider до `api` та `privateImage` у frontend/src/services/apiClient.ts. Поточний frontend API provider читає серверний opaque development-session token; Cognito env самі по собі не активують вхід. Не зберігати client secrets/паролі; Google login проходить через Cognito. UI callback зараз є повідомленням-заглушкою, не завершеним OAuth flow.
 
 ## S3 — AWS teammate
 

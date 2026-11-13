@@ -1,9 +1,15 @@
-import { apiMode } from "../config";
+import { apiMode, usesCognito } from "../config";
+import { cognito } from "./cognito";
 import { api } from "../services/apiClient";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 export type { AuthIdentity } from "./session";
-import { DevelopmentAuthAdapter, type AuthIdentity, type DevelopmentRegistration } from "./session";
+import {
+  CognitoAuthAdapter,
+  DevelopmentAuthAdapter,
+  type AuthIdentity,
+  type DevelopmentRegistration,
+} from "./session";
 export interface AuthAdapter {
   restore(): AuthIdentity | null | Promise<AuthIdentity | null>;
   signIn(identity: AuthIdentity): Promise<AuthIdentity>;
@@ -38,11 +44,16 @@ interface AuthContextValue {
   isLoading: boolean;
   signInLocal(identity: AuthIdentity): Promise<void>;
   registerLocal(input: DevelopmentRegistration): Promise<void>;
+  startCognitoLogin(kind: "signin" | "signup", provider?: string): Promise<void>;
   signOut(): Promise<void>;
   getAccessToken(): Promise<string | null>;
 }
 
-const adapter = apiMode ? new DevelopmentAuthAdapter(api, sessionStorage) : new LocalAuthAdapter();
+const adapter = !apiMode
+  ? new LocalAuthAdapter()
+  : usesCognito
+    ? new CognitoAuthAdapter(api, cognito)
+    : new DevelopmentAuthAdapter(api, sessionStorage);
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -84,6 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             : adapter.signIn({ ...input, isAdmin: false })),
         );
       },
+      startCognitoLogin: (kind, provider) => cognito.startLogin(kind, provider),
       async signOut() {
         try {
           await adapter.signOut();
@@ -106,6 +118,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           className="button"
           onClick={() => {
             sessionStorage.removeItem("lifetime:auth-session");
+            if (usesCognito) {
+              cognito.clear();
+              history.replaceState({}, "", "/login");
+            }
             setRestoreError("");
             setUser(null);
           }}
