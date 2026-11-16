@@ -22,7 +22,7 @@ Frontend: AuthAdapter у frontend/src/auth/AuthProvider.tsx; замінити Lo
 
 ## AI teammate
 
-Реальна модель/interpretation не підключені. У API-режимі локальний детермінований parser не використовується для відповідей. Всі `/api/ai/*` перевіряють Premium із БД.
+Реалізовано `POST /api/ai/interpret`: текст → proposal через провайдера з `backend/src/services/ai.ts` (`AI_PROVIDER=none|mock|bedrock`; `mock` лише для розробки, у production заборонений; `bedrock` викликає Amazon Bedrock Converse API з ключами з ролі EC2, без ключів у коді). Маршрут нічого не зберігає: proposal валідується тими самими схемами, що й ручне введення, `participantIds` обмежуються друзями користувача, `timezone` ставить сервер. Ліміти: 10 запитів/хв і 100/добу на користувача, таймаут провайдера 30 с. У API-режимі локальний детермінований parser не використовується для відповідей. Всі `/api/ai/*` перевіряють Premium із БД.
 
 1. GET /api/ai/context: до 100 власних events і tasks. Для великих календарів використовуйте paginated /api/events і /api/tasks з identity поточного користувача. Не додавайте довільний ownerId.
 2. POST /api/ai/availability: той самий payload і permission checks, що /api/availability. Не обчислюйте shared availability з локального неповного календаря.

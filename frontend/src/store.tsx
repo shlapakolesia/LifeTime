@@ -40,6 +40,8 @@ export interface Store {
   setSettings: React.Dispatch<React.SetStateAction<Settings>>;
   premiumRequests: PremiumRequest[];
   setPremiumRequests: React.Dispatch<React.SetStateAction<PremiumRequest[]>>;
+  /** API mode only: re-fetches data from the server (e.g. after the AI assistant saved something). */
+  reload?: () => Promise<void>;
 }
 
 export const StoreContext = createContext<Store | null>(null);

@@ -4,6 +4,7 @@ import express from "express";
 import cors from "cors";
 import multer from "multer";
 import { rateLimit } from "express-rate-limit";
+import { DateTime } from "luxon";
 import { z, ZodError } from "zod";
 import { Prisma } from "@prisma/client";
 import { config } from "./config/index.js";
@@ -17,6 +18,7 @@ import {
   requireAvailability,
 } from "./services/availability.js";
 import { storage, validateImage } from "./services/storage.js";
+import { createAiProvider, type AiProvider } from "./services/ai.js";
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -26,8 +28,9 @@ const page = (query: Record<string, unknown>) => ({
   skip: z.coerce.number().int().min(0).default(0).parse(query.offset),
   take: z.coerce.number().int().min(1).max(100).default(100).parse(query.limit),
 });
-export function createApp(verifier?: AccessTokenVerifier) {
+export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvider | null) {
   const app = express();
+  const ai = aiProvider === undefined ? createAiProvider(config.ai) : aiProvider;
   app.disable("x-powered-by");
   // Behind CloudFront: take the client IP from X-Forwarded-For so rate limits are per user.
   if (config.env === "production") app.set("trust proxy", 1);
@@ -631,6 +634,62 @@ export function createApp(verifier?: AccessTokenVerifier) {
     const user = await me(req.userId);
     if (user.premiumStatus !== "premium") throw new HttpError(403, "Потрібен Premium.");
     next();
+  });
+  const aiRateMessage = { message: "Забагато запитів до AI. Спробуйте трохи пізніше." };
+  const aiPerMinute = rateLimit({ windowMs: 60_000, limit: 10, keyGenerator: (req) => req.userId, message: aiRateMessage });
+  const aiPerDay = rateLimit({ windowMs: 86_400_000, limit: 100, keyGenerator: (req) => req.userId, message: aiRateMessage });
+  const aiProposal = z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("event"), data: eventInput }),
+    z.object({ kind: z.literal("task"), data: taskInput }),
+  ]);
+  // Turns free text into a proposal. Saves nothing: the user confirms via /proposals/confirm.
+  app.post("/api/ai/interpret", aiPerMinute, aiPerDay, async (req, res) => {
+    if (!ai) throw new HttpError(503, "AI-помічник не налаштований на сервері.");
+    const { text } = z.object({ text: z.string().trim().min(1).max(1000) }).strict().parse(req.body);
+    const user = await me(req.userId);
+    const zone = user.profile?.timezone || "UTC";
+    const friendships = await db.friendship.findMany({
+      where: { ownerId: req.userId },
+      include: { friend: { select: { id: true, profile: true } } },
+      take: 100,
+    });
+    const friends = friendships
+      .map((f) => ({
+        id: f.friend.id,
+        name: `${f.friend.profile?.firstName ?? ""} ${f.friend.profile?.lastName ?? ""}`.trim(),
+      }))
+      .filter((f) => f.name);
+    const nowIso = DateTime.now().setZone(zone).toISO({ suppressMilliseconds: true }) ?? new Date().toISOString();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    let raw;
+    try {
+      raw = await ai.interpret({ text, nowIso, timezone: zone, friends }, controller.signal);
+    } catch (error) {
+      console.error("AI provider error:", error instanceof Error ? error.message : error);
+      throw new HttpError(502, "AI-помічник тимчасово недоступний. Спробуйте ще раз.");
+    } finally {
+      clearTimeout(timer);
+    }
+    if (raw.type === "clarification") {
+      res.json({ type: "clarification", message: raw.message });
+      return;
+    }
+    const parsed = aiProposal.safeParse(raw.proposal);
+    if (!parsed.success) {
+      res.json({
+        type: "clarification",
+        message: "Не вдалося точно зрозуміти запит. Уточніть день, час і тривалість.",
+      });
+      return;
+    }
+    const proposal = parsed.data;
+    if (proposal.kind === "event") {
+      const allowed = new Set(friends.map((f) => f.id));
+      proposal.data.participantIds = proposal.data.participantIds.filter((pid) => allowed.has(pid));
+      proposal.data.timezone = zone;
+    }
+    res.json({ type: "proposal", message: raw.message, proposal });
   });
   app.get("/api/ai/context", async (req, res) =>
     res.json({

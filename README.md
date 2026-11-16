@@ -42,6 +42,8 @@ npm run dev   # запускає Vite з frontend/
 
 ## Перевірки
 
+Перший `npm install --prefix backend` автоматично генерує Prisma Client (`postinstall`). Якщо `build:backend` скаржиться на `Prisma` або параметр `tx`, виконайте `npm run db:generate`.
+
 ```bash
 npm run typecheck
 npm run build
@@ -80,6 +82,7 @@ NODE_ENV=test DEV_IDENTITY_ENABLED=true RUN_DB_TESTS=true DATABASE_URL=postgresq
 - [Моделі, міграції та seed](backend/docs/database.md)
 - [Локальний запуск і типові помилки](backend/docs/local-development.md)
 - [Контракти Cognito, S3, SES, AI](backend/docs/integration-guide.md)
+- [Передача: підключення AI-помічника](backend/docs/ai-handoff.md)
 - [Фактичні перевірки та обмеження](backend/docs/verification.md)
 - [Інфраструктура](infra/README.md), [деплой і оновлення](infra/docs/aws-deploy.md), [Cognito](infra/docs/cognito-setup.md)
 
