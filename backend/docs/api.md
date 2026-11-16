@@ -33,6 +33,7 @@ JSON-помилка: `{ "message": "Некоректні дані.", "issues": [
 | GET, POST | /api/premium/requests | Власні заявки / multipart заявка |
 | GET | /api/admin/premium-requests | Список заявок (admin) |
 | GET, PATCH | /api/admin/premium-requests/:id | Деталі / ручне рішення (admin) |
+| DELETE | /api/admin/premium-requests/:id | Видалити опрацьовану заявку разом зі скриншотом (admin). 409, якщо заявка ще pending або в користувача активний Premium |
 | DELETE | /api/admin/users/:id/premium | Відкликати чинний Premium (admin) |
 | GET | /api/ai/context | Власні події й завдання (Premium) |
 | POST | /api/ai/availability | Авторизований пошук (Premium) |
@@ -119,6 +120,8 @@ GET profile → User із вкладеним profile, серверними accou
 Premium: multipart лише `firstName`, `lastName`, `file`. Email автоматично береться з акаунта.
 Відповідь містить id, screenshotId, accountEmail, status=pending, createdAt. Скриншот не активує Premium.
 PATCH admin/premium-requests/:id: `{ "status":"approved", "reviewNotes":"Звірено" }` або rejected. Лише pending можна розглянути.
+DELETE admin/premium-requests/:id: 204. Pending не видаляється (спершу рішення), схвалену заявку з активним Premium — лише після `DELETE /api/admin/users/:id/premium`.
+POST ai/interpret: `{ "text":"10:00", "history":[{"role":"user","text":"…"},{"role":"assistant","text":"…"}] }` — `history` необовʼязковий (до 12 повідомлень), дає моделі контекст розмови.
 GET uploads/:id повертає binary WebP, не URL. Для скриншотів дозволено лише власника й admin. Аватари доступні автентифікованим користувачам. Файли не роздаються static middleware.
 PATCH notification: `{ "read":true }` → `{ "updated":1 }`.
 

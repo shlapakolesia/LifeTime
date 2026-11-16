@@ -19,8 +19,29 @@
 ## 3. Domain
 User Pool → App integration → **Domain** (Cognito domain або власний). Отримаєте `https://<prefix>.auth.<region>.amazoncognito.com`.
 
-## 4. Google (опційно)
-Створіть OAuth client у Google Cloud Console (redirect URI: `https://<prefix>.auth.<region>.amazoncognito.com/oauth2/idpresponse`), додайте Google як identity provider у пулі, змапте `email`, `given_name`, `family_name`, увімкніть його в App client. Назва провайдера має бути **Google** (так її передає кнопка).
+## 4. Google (вхід через Google)
+Код уже готовий (кнопка «Продовжити з Google» передає `identity_provider=Google`). Якщо вона веде на помилку, у Cognito не налаштований провайдер. Робиться один раз:
+
+**Google Cloud Console** ([console.cloud.google.com](https://console.cloud.google.com)):
+1. APIs & Services → **OAuth consent screen**: тип External, назва застосунку, ваш email. Поки застосунок у режимі *Testing*, увійти можуть лише email зі списку **Test users** — додайте туди акаунти для захисту (або натисніть *Publish app*).
+2. APIs & Services → **Credentials → Create credentials → OAuth client ID**, тип **Web application**.
+   - *Authorized JavaScript origins*: `https://<prefix>.auth.<region>.amazoncognito.com`
+   - *Authorized redirect URIs*: `https://<prefix>.auth.<region>.amazoncognito.com/oauth2/idpresponse`
+3. Скопіюйте **Client ID** і **Client secret**.
+
+**AWS Cognito** → ваш User Pool:
+1. **Social and external providers → Add identity provider → Google**. Ім'я провайдера — рівно **Google**. Вставте Client ID і secret, scopes: `profile email openid`.
+2. Attribute mapping (Google → Cognito): `email → email`, `email_verified → email_verified`, `given_name → given_name`, `family_name → family_name` (за бажанням `picture → picture`).
+3. **App clients → ваш client → Login pages (Managed login) → Edit → Identity providers**: увімкніть **Google** (поряд із Cognito user pool). Без цього кроку вхід завершується помилкою `invalid_request`/`redirect_mismatch`.
+4. Там же перевірте, що Callback URL = `https://<CLOUDFRONT-ДОМЕН>/auth/callback`, а OAuth scopes містять `openid email profile`.
+
+Типові помилки:
+- `redirect_uri_mismatch` від Google — у Google Cloud не збігається redirect URI із доменом Cognito (кінець має бути `/oauth2/idpresponse`).
+- `Error 403: access_denied` від Google — застосунок у режимі Testing, а ваш email не в Test users.
+- Cognito «invalid_request» або сторінка помилки — Google не увімкнений в App client (крок 3).
+- `Підтвердіть email` від API — не змаплений `email_verified` (API все одно довіряє токенам Google, але змапте атрибут).
+
+Один email — один акаунт: якщо людина вже зареєстрована через email+пароль, вхід через Google з тим самим email **прив'язується до існуючого акаунта** (таблиця `UserIdentity`, міграція `202611160001_user_identities`); календар, друзі й Premium зберігаються.
 
 ## 5. Змінні
 **Backend** (App Runner / ECS):
@@ -52,6 +73,6 @@ UPDATE "User" SET "accountRole" = 'admin' WHERE email = 'you@example.com';
 
 ## Поведінка та обмеження
 - Перший вхід створює `User` + `UserProfile` (імʼя з `given_name`/`family_name`, інакше з email; часовий пояс браузера; активні години за замовчуванням 08:00–21:00 — змінюються в налаштуваннях).
-- Акаунти **не зливаються за email**: якщо email уже є в БД з іншим `subject` (наприклад, спершу email+пароль, потім Google), API повертає 409. Обʼєднання — вручну або через Pre sign-up Lambda trigger.
+- Різні способи входу з одним підтвердженим email (email+пароль і Google) обʼєднуються в один акаунт через `UserIdentity`. Усе, що Cognito не вважає підтвердженим email, відхиляється (403).
 - Токени зберігаються в `sessionStorage` (як і раніше сесія). Це простіше, але вразливе до XSS; тримайте строгий CSP на CloudFront.
 - За проксі (App Runner/ALB) додайте в `app.ts` `app.set("trust proxy", 1)`, інакше rate limit рахуватиметься по IP проксі, а не користувача.

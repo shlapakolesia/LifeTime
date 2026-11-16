@@ -1,12 +1,12 @@
 import { apiMode } from "../config";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { addDays, formatDate } from "../data";
 import { useStore } from "../store";
 import { Avatar, Button } from "../components/UI";
 import { Icon } from "../components/Icons";
 import { avatarUploadService, validateImage } from "../services/avatarService";
 import { smartSchedulingService, type SmartDraft } from "../services/smartSchedulingService";
-import { aiService, type AiProposal } from "../services/aiService";
+import { aiService, type AiHistoryTurn, type AiProposal } from "../services/aiService";
 import { calculateAvailabilitySlots } from "../services/availabilityService";
 import { minutes } from "../data";
 
@@ -33,13 +33,25 @@ export function AssistantPage({
   const [draft, setDraft] = useState<SmartDraft | null>(null);
   const [proposal, setProposal] = useState<AiProposal | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const messagesBox = useRef<HTMLDivElement>(null);
+  // Keep the newest message in view; only the message list scrolls, never the whole page.
+  useEffect(() => {
+    const box = messagesBox.current;
+    if (box) box.scrollTo({ top: box.scrollHeight, behavior: "smooth" });
+  }, [messages, typing, proposal, draft]);
   const askAi = async (text: string) => {
+    // The first message is the static greeting; buttons and confirmations are not part of the dialogue.
+    const history: AiHistoryTurn[] = messages
+      .slice(1)
+      .filter((m) => !m.action)
+      .slice(-8)
+      .map((m) => ({ role: m.role === "ai" ? "assistant" : "user", text: m.text.slice(0, 1000) }));
     setMessages((m) => [...m, { role: "user", text }]);
     setInput("");
     setProposal(null);
     setTyping(true);
     try {
-      const result = await aiService.interpret(text);
+      const result = await aiService.interpret(text, history);
       setMessages((m) => [...m, { role: "ai", text: result.message }]);
       if (result.type === "proposal") setProposal(result.proposal);
     } catch (error) {
@@ -288,7 +300,7 @@ export function AssistantPage({
               Premium
             </span>
           </div>
-          <div className="messages">
+          <div className="messages" ref={messagesBox}>
             {messages.map((m, i) => (
               <div key={i} className={`message ${m.role}`}>
                 <div className="message-bubble">

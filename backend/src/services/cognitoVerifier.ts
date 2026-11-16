@@ -132,12 +132,23 @@ export class CognitoVerifier implements AccessTokenVerifier {
     const claims = await this.decode(token, "id");
     if (typeof claims.email !== "string" || !claims.email) throw new Error("ID token has no email");
     const str = (value: unknown) => (typeof value === "string" ? value : undefined);
+    // Cognito puts the upstream provider (Google, ...) into the signed `identities` claim.
+    const provider = Array.isArray(claims.identities)
+      ? str((claims.identities[0] as Record<string, unknown> | undefined)?.providerName)
+      : undefined;
+    // Google only returns verified addresses, but Cognito copies `email_verified` into the token only
+    // when it is mapped in the identity provider. Trust Google's own guarantee when it is missing.
+    const emailVerified =
+      claims.email_verified === true || claims.email_verified === "true" || provider === "Google";
+    // Some providers return only a full `name`; split it when given/family names are not mapped.
+    const [firstWord, ...otherWords] = (str(claims.name) ?? "").trim().split(/\s+/);
     return {
       subject: claims.sub as string,
       email: claims.email,
-      emailVerified: claims.email_verified === true || claims.email_verified === "true",
-      givenName: str(claims.given_name),
-      familyName: str(claims.family_name),
+      emailVerified,
+      givenName: str(claims.given_name) ?? (firstWord || undefined),
+      familyName: str(claims.family_name) ?? (otherWords.join(" ") || undefined),
+      ...(provider ? { provider } : {}),
     };
   }
 }

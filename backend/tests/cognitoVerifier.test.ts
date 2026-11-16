@@ -63,6 +63,15 @@ test("email_verified accepts the string form and rejects everything else", async
   assert.equal((await verifier.verifyIdToken(jwt(keys[0], idClaims({ email_verified: false })))).emailVerified, false);
   assert.equal((await verifier.verifyIdToken(jwt(keys[0], idClaims({ email_verified: undefined })))).emailVerified, false);
 });
+test("Google logins are verified even when email_verified is not mapped, and expose the provider", async () => {
+  const { verifier, keys } = setup();
+  const google = { identities: [{ providerName: "Google" }], name: "Софія Садовенко", given_name: undefined, family_name: undefined };
+  const profile = await verifier.verifyIdToken(jwt(keys[0], idClaims({ ...google, email_verified: undefined })));
+  assert.equal(profile.emailVerified, true);
+  assert.equal(profile.provider, "Google");
+  assert.equal(profile.givenName, "Софія");
+  assert.equal(profile.familyName, "Садовенко");
+});
 test("wrong issuer, client, audience, token_use and expiry are rejected", async () => {
   const { verifier, keys } = setup();
   const k = keys[0];

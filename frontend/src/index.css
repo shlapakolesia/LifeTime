@@ -274,3 +274,82 @@
 .sidebar{overflow-y:auto;overscroll-behavior:contain}
 .sidebar nav,.sidebar-top,.sidebar-card,.user-menu{flex:none}
 .sidebar-card{margin-top:auto}
+
+/* ---------- AI assistant: only the message list scrolls ---------- */
+/* The grid row used to grow with the messages, which pushed the input and the context box off screen. */
+.assistant-page{min-height:520px}
+.assistant-shell{grid-template-rows:minmax(0,1fr);min-height:0}
+.assistant-aside{min-height:0;overflow-y:auto}
+.chat-panel{min-height:0;overflow:hidden}
+.chat-head,.prompt-row,.chat-input{flex:none}
+.messages{min-height:0;overscroll-behavior:contain}
+.message-bubble{overflow-wrap:anywhere}
+@supports (height:100dvh){
+  .assistant-page{height:calc(100dvh - 72px)}
+  @media(max-width:640px){.assistant-page{height:calc(100dvh - 62px)}}
+}
+
+/* ---------- Dialogs (replace browser prompt/confirm) ---------- */
+.dialog-text{font-size:13px;line-height:1.6;color:var(--ink);margin:4px 0 0}
+.dialog-text b{font-weight:700}
+.dialog-error{display:block;margin-top:12px;font-size:11px;color:#b44d5d;background:#fbedef;border-radius:8px;padding:8px 10px}
+.dialog-actions{justify-content:flex-end}
+.person-list{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:8px;max-height:min(50vh,360px);overflow-y:auto}
+.person-list li{display:flex;align-items:center;gap:12px;padding:9px 12px;border:1px solid var(--line);border-radius:13px;background:var(--surface)}
+.person-list li>span:not(.avatar){flex:1;min-width:0}
+.person-list b{display:block;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.person-list .button{min-height:34px;font-size:12px;padding:0 13px}
+.person-list .person-confirm{display:flex;flex:none;gap:4px}
+
+/* ---------- Friends ---------- */
+.friend-invite{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1.4fr) auto;align-items:center;gap:14px;background:linear-gradient(135deg,#f3effc,#fbf9f5);border:1px solid #ddd5f1;border-radius:18px;padding:18px 20px;margin-bottom:18px}
+.friend-invite b{font-size:14px}
+.friend-invite p{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.45}
+.friend-invite input{height:42px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:11px;padding:0 13px;font-size:12px;min-width:0;width:100%}
+.friend-invite input:focus{border-color:#9b8bdd;box-shadow:0 0 0 3px rgba(109,88,203,.09)}
+.success-note{background:#e8f3ef;color:var(--green);border-radius:10px;padding:9px 12px;font-size:11px;margin:0 0 14px}
+.invite-banner b{font-size:13px}
+.invite-banner span{font-size:11px}
+.friend-card-v2{display:flex;flex-direction:column;gap:16px;transition:transform .2s,box-shadow .2s}
+.friend-card-v2:hover{transform:translateY(-2px);box-shadow:0 18px 50px rgba(34,32,45,.1)}
+.friend-card-head{display:flex;align-items:center;gap:14px;min-width:0}
+.friend-card-head>div{min-width:0}
+.friend-card-v2 .friend-card-head h3{margin:0;font-size:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.friend-card-v2 .friend-card-head p{margin-top:3px;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.share-toggle{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 14px;border-radius:13px;background:var(--surface-2);cursor:pointer}
+.share-toggle>span{min-width:0}
+.share-toggle b{display:block;font-size:12px}
+.share-toggle small{display:block;margin-top:3px;font-size:10px;line-height:1.4;color:var(--muted)}
+.switch{appearance:none;-webkit-appearance:none;flex:none;width:42px;height:24px;border-radius:999px;background:#d3cfdd;position:relative;cursor:pointer;transition:background .2s}
+.switch:after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(34,32,45,.25);transition:transform .2s}
+.switch:checked{background:var(--violet)}
+.switch:checked:after{transform:translateX(18px)}
+.friend-card-actions{display:flex;gap:8px;margin-top:auto}
+.friend-card-actions .button{flex:1}
+.icon-button.danger-icon:hover{color:#bd4c5a;border-color:#efc4ca;background:#fbedef}
+
+/* ---------- Groups ---------- */
+.group-card .group-actions{flex-wrap:wrap}
+.group-card .group-find{flex:1 1 100%}
+.group-manage{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.manage-btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 11px;border-radius:9px;font-size:11px;font-weight:600;color:var(--muted);background:var(--surface-2);white-space:nowrap;transition:background .15s,color .15s}
+.manage-btn:hover:not(:disabled){color:var(--violet);background:var(--violet-soft)}
+.manage-btn:disabled{opacity:.45;cursor:not-allowed}
+.manage-btn.danger{color:#bd4c5a;background:#fbedef}
+.manage-btn.danger:hover:not(:disabled){color:#a93e4d;background:#f7dfe3}
+.manage-btn.icon-only{width:32px;padding:0;justify-content:center;margin-left:auto}
+.inline-create-error{grid-column:1/-1;margin:0}
+
+/* ---------- Administrator: filters and cleanup ---------- */
+.admin-tabs{display:flex;gap:6px;margin-bottom:18px;padding:4px;background:var(--surface-2);border-radius:13px;width:max-content;max-width:100%;overflow-x:auto}
+.admin-tabs button{display:flex;align-items:center;gap:7px;height:36px;padding:0 14px;border-radius:10px;font-size:12px;font-weight:600;color:var(--muted);white-space:nowrap}
+.admin-tabs button i{font-style:normal;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:rgba(0,0,0,.06);display:grid;place-items:center;font-size:10px}
+.admin-tabs button.active{background:var(--surface);color:var(--violet);box-shadow:0 2px 8px rgba(34,32,45,.08)}
+.admin-tabs button.active i{background:var(--violet-soft)}
+.request-actions .delete-request{margin-right:auto;color:#a65360}
+.request-actions .delete-request:hover:not(:disabled){background:#fbedef}
+.admin-empty{grid-column:1/-1}
+
+@media(max-width:900px){
+  .friend-invite{grid-template-columns:1fr}
+}

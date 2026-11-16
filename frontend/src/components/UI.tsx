@@ -74,6 +74,39 @@ export function Modal({
   );
 }
 
+/** Replaces window.confirm: a styled dialog that matches the rest of the app. */
+export function ConfirmDialog({
+  title,
+  text,
+  confirmLabel = "Підтвердити",
+  danger = false,
+  busy = false,
+  onConfirm,
+  onClose,
+}: {
+  title: string;
+  text: ReactNode;
+  confirmLabel?: string;
+  danger?: boolean;
+  busy?: boolean;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title={title} onClose={busy ? () => undefined : onClose}>
+      <p className="dialog-text">{text}</p>
+      <div className="modal-actions dialog-actions">
+        <Button variant="secondary" onClick={onClose} disabled={busy}>
+          Скасувати
+        </Button>
+        <Button variant={danger ? "danger" : "primary"} onClick={onConfirm} disabled={busy}>
+          {busy ? "Зачекайте…" : confirmLabel}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
 export function Toast({ text, onDone }: { text: string; onDone: () => void }) {
   useEffect(() => {
     const id = setTimeout(onDone, 3200);

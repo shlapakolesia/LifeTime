@@ -12,6 +12,8 @@ export interface VerifiedProfile {
   emailVerified: boolean;
   givenName?: string;
   familyName?: string;
+  /** Identity provider behind the login, e.g. "Google". Absent for Cognito's own email+password users. */
+  provider?: string;
 }
 /** Cognito adapter must validate signature, issuer, token_use=access, expiry and client ID. */
 export interface AccessTokenVerifier {
@@ -72,7 +74,9 @@ export const authenticate =
           return;
         }
       }
-      const user = await db.user.findUnique({ where: { subject } });
+      const user =
+        (await db.user.findUnique({ where: { subject } })) ??
+        (await db.userIdentity.findUnique({ where: { subject }, include: { user: true } }))?.user;
       if (!user) {
         res
           .status(401)

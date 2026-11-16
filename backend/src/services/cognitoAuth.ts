@@ -18,7 +18,8 @@ const clean = (value: string | undefined, fallback: string) =>
  * POST /api/auth/provision — idempotent "first login" endpoint.
  * Needs a valid Cognito ACCESS token in Authorization and the matching ID token in the body.
  * Account data (email, names) comes only from the verified ID token, never from the browser.
- * Accounts are never auto-linked by email: an existing user with another subject gets 409.
+ * A second login with the same verified email (e.g. Google after email+password) is linked to the
+ * existing account through UserIdentity instead of creating a duplicate or failing.
  */
 export function cognitoAuthRouter(verifier?: AccessTokenVerifier) {
   const router = Router();
@@ -40,12 +41,29 @@ export function cognitoAuthRouter(verifier?: AccessTokenVerifier) {
     if (claims.subject !== subject) throw new HttpError(401, "Недійсна сесія. Увійдіть повторно.");
     if (!claims.emailVerified) throw new HttpError(403, "Підтвердіть email, щоб продовжити.");
     const include = { profile: true } as const;
-    const existing = await db.user.findUnique({ where: { subject }, include });
+    const existing =
+      (await db.user.findUnique({ where: { subject }, include })) ??
+      (await db.userIdentity.findUnique({ where: { subject }, include: { user: { include } } }))?.user;
     if (existing) {
       res.json(existing);
       return;
     }
     const email = emailInput.parse(claims.email);
+    // The same person signing in another way (e.g. Google after email+password). Both logins carry a
+    // verified email (checked above), so the new login is linked to the existing account.
+    const sameEmail = await db.user.findUnique({ where: { email }, include });
+    if (sameEmail) {
+      try {
+        await db.userIdentity.create({
+          data: { subject, userId: sameEmail.id, provider: claims.provider ?? "cognito" },
+        });
+      } catch (error) {
+        if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"))
+          throw error;
+      }
+      res.json(sameEmail);
+      return;
+    }
     const zone = timezone.safeParse(input.timezone).success ? input.timezone : undefined;
     try {
       const user = await db.user.create({

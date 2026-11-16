@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { Icon } from "../components/Icons";
-import { Avatar, Button } from "../components/UI";
+import { Avatar, Button, ConfirmDialog } from "../components/UI";
 import { useStore } from "../store";
 import type { PremiumRequest } from "../types";
 import { api } from "../services/apiClient";
@@ -520,6 +520,11 @@ export function AdminPage() {
     setPremiumRequests,
   } = useStore();
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [tab, setTab] = useState<"pending" | "processed" | "all">("pending");
+  const [toDelete, setToDelete] = useState<PremiumRequest | null>(null);
+  const [bulkDelete, setBulkDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   if (currentUser.accountRole !== "admin")
     return (
       <div className="page">
@@ -589,6 +594,49 @@ export function AdminPage() {
       if (request.userId === currentUser.id) setCurrentUser(updated);
     }
   };
+  const pendingRequests = premiumRequests.filter((r) => r.status === "pending");
+  const processedRequests = premiumRequests.filter((r) => r.status !== "pending");
+  const shownRequests =
+    tab === "pending" ? pendingRequests : tab === "processed" ? processedRequests : premiumRequests;
+  // An approved request with active Premium is only removed on purpose (single delete revokes it first).
+  const activePremium = (r: PremiumRequest) => r.status === "approved" && Boolean(r.premiumActive);
+  const bulkTargets = processedRequests.filter((r) => !activePremium(r));
+  const targets = toDelete ? [toDelete] : bulkDelete ? bulkTargets : [];
+  const deleteRequest = async (request: PremiumRequest) => {
+    if (!apiMode) return;
+    if (activePremium(request))
+      await api.request(`/api/admin/users/${request.userId}/premium`, { method: "DELETE" });
+    await api.request(`/api/admin/premium-requests/${request.id}`, { method: "DELETE" });
+  };
+  const confirmDelete = async () => {
+    setDeleting(true);
+    setDeleteError("");
+    const done: string[] = [];
+    try {
+      for (const request of targets) {
+        await deleteRequest(request);
+        done.push(request.id);
+      }
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "Не вдалося видалити заявку.");
+    }
+    try {
+      if (apiMode) await setPremiumRequests(premiumRequests);
+      else setPremiumRequests(premiumRequests.filter((r) => !done.includes(r.id)));
+    } catch {
+      /* the store shows its own error */
+    }
+    setDeleting(false);
+    if (done.length === targets.length) {
+      setToDelete(null);
+      setBulkDelete(false);
+    }
+  };
+  const tabs = [
+    { id: "pending", label: "Очікують", count: pendingRequests.length },
+    { id: "processed", label: "Опрацьовані", count: processedRequests.length },
+    { id: "all", label: "Усі", count: premiumRequests.length },
+  ] as const;
   return (
     <div className="page admin-page">
       <div className="admin-warning">
@@ -602,12 +650,39 @@ export function AdminPage() {
         <div>
           <span className="eyebrow">Обмежена зона</span>
           <h1>Premium-заявки</h1>
-          <p>{premiumRequests.filter((r) => r.status === "pending").length} очікують перевірки</p>
+          <p>{pendingRequests.length} очікують перевірки</p>
         </div>
+        {tab === "processed" && bulkTargets.length > 0 && (
+          <Button
+            variant="danger"
+            icon="trash"
+            onClick={() => {
+              setDeleteError("");
+              setBulkDelete(true);
+            }}
+          >
+            Очистити опрацьовані ({bulkTargets.length})
+          </Button>
+        )}
+      </div>
+      <div className="admin-tabs" role="tablist" aria-label="Фільтр заявок">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            className={tab === t.id ? "active" : ""}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+            <i>{t.count}</i>
+          </button>
+        ))}
       </div>
       <div className="admin-requests">
-        {premiumRequests.length ? (
-          premiumRequests.map((r) => (
+        {shownRequests.length ? (
+          shownRequests.map((r) => (
             <article key={r.id}>
               <div className="request-head">
                 <div>
@@ -676,19 +751,80 @@ export function AdminPage() {
                     Відкликати доступ
                   </Button>
                 )}
+                {r.status !== "pending" && (
+                  <Button
+                    variant="ghost"
+                    icon="trash"
+                    className="delete-request"
+                    onClick={() => {
+                      setDeleteError("");
+                      setToDelete(r);
+                    }}
+                  >
+                    {activePremium(r) ? "Відкликати й видалити" : "Видалити заявку"}
+                  </Button>
+                )}
               </div>
             </article>
           ))
         ) : (
-          <div className="empty-state">
+          <div className="empty-state admin-empty">
             <span>
               <Icon name="check" />
             </span>
-            <h3>Заявок ще немає</h3>
-            <p>Нові запити з’являться тут після подання користувачами.</p>
+            <h3>
+              {tab === "pending"
+                ? "Нових заявок немає"
+                : tab === "processed"
+                  ? "Опрацьованих заявок немає"
+                  : "Заявок ще немає"}
+            </h3>
+            <p>
+              {tab === "pending" && processedRequests.length
+                ? "Опрацьовані заявки сховано у вкладці «Опрацьовані»."
+                : "Нові запити з’являться тут після подання користувачами."}
+            </p>
           </div>
         )}
       </div>
+      {(toDelete || bulkDelete) && (
+        <ConfirmDialog
+          title={toDelete ? "Видалити заявку?" : "Очистити опрацьовані заявки?"}
+          danger
+          busy={deleting}
+          confirmLabel={
+            toDelete
+              ? activePremium(toDelete)
+                ? "Відкликати й видалити"
+                : "Видалити"
+              : `Видалити (${bulkTargets.length})`
+          }
+          text={
+            toDelete ? (
+              <>
+                Заявку від <b>{toDelete.submittedFullName}</b> буде видалено разом зі
+                скриншотом. Цю дію не можна скасувати.
+                {activePremium(toDelete) && (
+                  <> Premium-доступ цього користувача буде відкликано.</>
+                )}
+                {deleteError && <span className="dialog-error">{deleteError}</span>}
+              </>
+            ) : (
+              <>
+                Буде видалено опрацьовані заявки ({bulkTargets.length}) разом зі скриншотами.
+                Заявки з активним Premium залишаться: щоб прибрати їх, спершу відкличте доступ.
+                Заявки, що очікують, не чіпаємо.
+                {deleteError && <span className="dialog-error">{deleteError}</span>}
+              </>
+            )
+          }
+          onConfirm={() => void confirmDelete()}
+          onClose={() => {
+            setToDelete(null);
+            setBulkDelete(false);
+          }}
+        />
+      )}
     </div>
   );
 }

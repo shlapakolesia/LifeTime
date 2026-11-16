@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   AiOutputError,
+  buildConversation,
   buildSystemPrompt,
   createAiProvider,
   createMockProvider,
@@ -65,4 +66,38 @@ test("createAiProvider returns null for none and a provider otherwise", () => {
   assert.equal(createAiProvider({ provider: "none", bedrockModelId: "", region: "eu-north-1" }), null);
   assert.equal(createAiProvider({ provider: "mock", bedrockModelId: "", region: "eu-north-1" })?.name, "mock");
   assert.equal(createAiProvider({ provider: "bedrock", bedrockModelId: "m", region: "eu-north-1" })?.name, "bedrock");
+});
+
+test("conversation keeps earlier turns so a clarification answer has context", () => {
+  const turns = buildConversation({
+    text: "10:00",
+    history: [
+      { role: "user", text: "Хочу зустрітися з подругами в суботу" },
+      { role: "assistant", text: "О котрій годині?" },
+    ],
+  });
+  assert.deepEqual(
+    turns.map((t) => t.role),
+    ["user", "assistant", "user"],
+  );
+  assert.equal(turns[2].text, "10:00");
+});
+
+test("conversation always starts and ends with a user turn and merges equal roles", () => {
+  const turns = buildConversation({
+    text: "завтра",
+    history: [
+      { role: "assistant", text: "Привіт" },
+      { role: "user", text: "a" },
+      { role: "user", text: "b" },
+      { role: "assistant", text: "?" },
+      { role: "assistant", text: "??" },
+    ],
+  });
+  assert.deepEqual(
+    turns.map((t) => t.role),
+    ["user", "assistant", "user"],
+  );
+  assert.equal(turns[0].text, "a\nb");
+  assert.equal(buildConversation({ text: "x" }).length, 1);
 });

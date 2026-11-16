@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { addDays, formatDate, minutes, weekday } from "../data";
 import { useStore } from "../store";
-import type { CalendarEvent, Slot } from "../types";
-import { Avatar, Button } from "../components/UI";
+import type { CalendarEvent, Group, Slot, User } from "../types";
+import { Avatar, Button, ConfirmDialog, Modal } from "../components/UI";
 import { Icon } from "../components/Icons";
 import { apiMode } from "../config";
 import { api } from "../services/apiClient";
@@ -554,19 +554,32 @@ function DemoFriendsPage({ goFind }: { goFind: (ids?: string[]) => void }) {
   );
 }
 
+const membersWord = (n: number) => {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return "учасник";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return "учасники";
+  return "учасників";
+};
+
 export function GroupsPage({ goFind }: { goFind: (ids?: string[]) => void }) {
   const { groups, setGroups, users } = useStore();
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [createError, setCreateError] = useState("");
+  const [toDelete, setToDelete] = useState<Group | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const create = async () => {
     if (!name.trim()) return;
+    setCreateError("");
     try {
       await setGroups([
         ...groups,
         {
           id: `g-${Date.now()}`,
-          name,
+          name: name.trim(),
           description,
           memberIds: ["me"],
           ownerId: "me",
@@ -577,7 +590,20 @@ export function GroupsPage({ goFind }: { goFind: (ids?: string[]) => void }) {
       setDescription("");
       setCreating(false);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Помилка створення");
+      setCreateError(e instanceof Error ? e.message : "Не вдалося створити групу.");
+    }
+  };
+  const removeGroup = async () => {
+    if (!toDelete) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await setGroups(groups.filter((x) => x.id !== toDelete.id));
+      setToDelete(null);
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : "Не вдалося видалити групу.");
+    } finally {
+      setDeleting(false);
     }
   };
   return (
@@ -612,56 +638,94 @@ export function GroupsPage({ goFind }: { goFind: (ids?: string[]) => void }) {
             />
           </label>
           <Button onClick={create}>Створити</Button>
-          <Button variant="ghost" onClick={() => setCreating(false)}>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setCreating(false);
+              setCreateError("");
+            }}
+          >
             Скасувати
           </Button>
+          {createError && <p className="form-error inline-create-error">{createError}</p>}
         </div>
       )}
       <div className="group-grid">
-        {groups.map((g, i) => (
-          <article className={`group-card group-${i % 3}`} key={g.id}>
-            <div className="group-symbol" style={{ background: g.color }}>
-              <Icon name="groups" />
-            </div>
-            <span className="group-count">{g.memberIds.length} учасники</span>
-            <h2>{g.name}</h2>
-            <p>{g.description}</p>
-            <div className="member-stack">
-              {g.memberIds.map((id) => (
-                <Avatar key={id} user={users.find((u) => u.id === id) || users[0]} />
-              ))}
-            </div>
-            <div className="group-next">
-              <span>Наступна зустріч</span>
-              <b>{"Перегляньте календар"}</b>
-            </div>
-            <div className="group-actions">
-              {apiMode && <GroupControls groupId={g.id} owner={g.ownerId === "me"} />}
-              <Button
-                variant="secondary"
-                onClick={() => goFind(g.memberIds.filter((id) => id !== "me"))}
-              >
-                Знайти спільний час
-              </Button>
-              {g.ownerId === "me" && (
-                <button
-                  className="icon-button"
-                  onClick={() => {
-                    if (confirm("Видалити групу?")) setGroups(groups.filter((x) => x.id !== g.id));
-                  }}
+        {groups.map((g, i) => {
+          const owner = g.ownerId === "me";
+          return (
+            <article className={`group-card group-${i % 3}`} key={g.id}>
+              <div className="group-symbol" style={{ background: g.color }}>
+                <Icon name="groups" />
+              </div>
+              <span className="group-count">
+                {g.memberIds.length} {membersWord(g.memberIds.length)}
+              </span>
+              <h2>{g.name}</h2>
+              <p>{g.description}</p>
+              <div className="member-stack">
+                {g.memberIds.map((id) => (
+                  <Avatar key={id} user={users.find((u) => u.id === id) || users[0]} />
+                ))}
+              </div>
+              <div className="group-next">
+                <span>Наступна зустріч</span>
+                <b>{"Перегляньте календар"}</b>
+              </div>
+              <div className="group-actions">
+                <Button
+                  variant="secondary"
+                  className="group-find"
+                  onClick={() => goFind(g.memberIds.filter((id) => id !== "me"))}
                 >
-                  <Icon name="trash" size={17} />
-                </button>
-              )}
-            </div>
-          </article>
-        ))}
+                  <Icon name="find" size={16} />
+                  Знайти спільний час
+                </Button>
+              </div>
+              <div className="group-manage">
+                {apiMode && <GroupControls group={g} owner={owner} />}
+                {owner && (
+                  <button
+                    type="button"
+                    className="manage-btn danger icon-only"
+                    title="Видалити групу"
+                    aria-label="Видалити групу"
+                    onClick={() => {
+                      setDeleteError("");
+                      setToDelete(g);
+                    }}
+                  >
+                    <Icon name="trash" size={16} />
+                  </button>
+                )}
+              </div>
+            </article>
+          );
+        })}
       </div>
+      {toDelete && (
+        <ConfirmDialog
+          title="Видалити групу?"
+          danger
+          busy={deleting}
+          confirmLabel="Видалити групу"
+          text={
+            <>
+              Групу <b>«{toDelete.name}»</b> буде видалено для всіх учасників. Цю дію не можна
+              скасувати.
+              {deleteError && <span className="dialog-error">{deleteError}</span>}
+            </>
+          }
+          onConfirm={() => void removeGroup()}
+          onClose={() => setToDelete(null)}
+        />
+      )}
     </div>
   );
 }
 
 function ApiFriendsPage({ goFind }: { goFind: (ids?: string[]) => void }) {
+  const { users } = useStore();
   const [friends, setFriends] = useState<{ friend: UserDto; shareAvailability: boolean }[]>([]);
   const [requests, setRequests] = useState<
     { id: string; senderId: string; recipientId: string; sender: UserDto }[]
@@ -669,7 +733,14 @@ function ApiFriendsPage({ goFind }: { goFind: (ids?: string[]) => void }) {
   const [self, setSelf] = useState(""),
     [email, setEmail] = useState(""),
     [error, setError] = useState(""),
-    [message, setMessage] = useState("");
+    [message, setMessage] = useState(""),
+    [query, setQuery] = useState(""),
+    [inviting, setInviting] = useState(false),
+    [loaded, setLoaded] = useState(false),
+    [toRemove, setToRemove] = useState<User | null>(null),
+    [removing, setRemoving] = useState(false);
+  // The store already holds every known person with a loaded photo; prefer it over the bare DTO.
+  const person = (dto: UserDto): User => users.find((x) => x.id === dto.id) ?? userDto(dto);
   async function load() {
     const [me, fs, rs] = await Promise.all([
       api.request<UserDto>("/api/profile"),
@@ -679,6 +750,7 @@ function ApiFriendsPage({ goFind }: { goFind: (ids?: string[]) => void }) {
     setSelf(me.id);
     setFriends(fs);
     setRequests(rs);
+    setLoaded(true);
   }
   useEffect(() => {
     load().catch((e) => setError(e.message));
@@ -692,78 +764,147 @@ function ApiFriendsPage({ goFind }: { goFind: (ids?: string[]) => void }) {
       setError(e instanceof Error ? e.message : "Помилка API");
     }
   }
+  const invite = async () => {
+    const address = email.trim();
+    if (!address || inviting) return;
+    setMessage("");
+    setInviting(true);
+    await action(async () => {
+      const matches = await api.request<UserDto[]>(`/api/users?email=${encodeURIComponent(address)}`);
+      if (!matches[0]) throw new Error("Користувача з такою email-адресою не знайдено.");
+      await api.request("/api/friend-requests", {
+        method: "POST",
+        body: JSON.stringify({ recipientId: matches[0].id }),
+      });
+      setMessage("Запит надіслано.");
+      setEmail("");
+    });
+    setInviting(false);
+  };
+  const incoming = requests.filter((r) => r.recipientId === self);
+  const visible = friends.filter((f) =>
+    `${f.friend.profile.firstName} ${f.friend.profile.lastName}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase()),
+  );
   return (
     <div className="page">
       <div className="page-title-row">
         <div>
           <span className="eyebrow">Твоє коло</span>
           <h1>Друзі</h1>
-          <p>Пошук за точною email-адресою.</p>
+          <p>Додавай людей за точною email-адресою й ділись лише зайнятістю, без подробиць.</p>
         </div>
       </div>
-      <div className="inline-invite">
-        <label className="field">
-          <span>Email друга</span>
-          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-        </label>
-        <Button
-          onClick={() =>
-            action(async () => {
-              const matches = await api.request<UserDto[]>(
-                `/api/users?email=${encodeURIComponent(email)}`,
-              );
-              if (!matches[0]) throw new Error("Користувача не знайдено.");
-              await api.request("/api/friend-requests", {
-                method: "POST",
-                body: JSON.stringify({ recipientId: matches[0].id }),
-              });
-              setMessage("Запит надіслано.");
-            })
-          }
-        >
-          Запросити друга
+      <form
+        className="friend-invite"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void invite();
+        }}
+      >
+        <div>
+          <b>Запросити друга</b>
+          <p>Введи email, з яким людина зареєстрована в LifeTime.</p>
+        </div>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="friend@example.com"
+          aria-label="Email друга"
+        />
+        <Button type="submit" icon="friends" disabled={!email.trim() || inviting}>
+          {inviting ? "Надсилаємо…" : "Запросити"}
         </Button>
-      </div>
+      </form>
       {error && <p className="form-error">{error}</p>}
-      {message && <p>{message}</p>}
-      {requests
-        .filter((r) => r.recipientId === self)
-        .map((r) => (
+      {message && <p className="success-note">{message}</p>}
+      {incoming.map((r) => {
+        const sender = person(r.sender);
+        return (
           <div className="invite-banner" key={r.id}>
-            <Avatar user={userDto(r.sender)} />
-            <b>
-              {r.sender.profile.firstName} {r.sender.profile.lastName}
-            </b>
-            {(["rejected", "accepted"] as const).map((status) => (
-              <Button
-                key={status}
-                onClick={() =>
-                  action(() =>
-                    api.request(`/api/friend-requests/${r.id}`, {
-                      method: "PATCH",
-                      body: JSON.stringify({ status }),
-                    }),
-                  )
-                }
-              >
-                {status === "accepted" ? "Прийняти" : "Відхилити"}
-              </Button>
-            ))}
+            <Avatar user={sender} />
+            <div>
+              <b>
+                {sender.firstName} {sender.lastName}
+              </b>
+              <span>хоче додати тебе в друзі</span>
+            </div>
+            <Button
+              variant="secondary"
+              onClick={() =>
+                action(() =>
+                  api.request(`/api/friend-requests/${r.id}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ status: "rejected" }),
+                  }),
+                )
+              }
+            >
+              Відхилити
+            </Button>
+            <Button
+              onClick={() =>
+                action(() =>
+                  api.request(`/api/friend-requests/${r.id}`, {
+                    method: "PATCH",
+                    body: JSON.stringify({ status: "accepted" }),
+                  }),
+                )
+              }
+            >
+              Прийняти
+            </Button>
           </div>
-        ))}
+        );
+      })}
+      {friends.length > 3 && (
+        <label className="search-field page-search">
+          <Icon name="search" size={17} />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Знайти друга"
+          />
+        </label>
+      )}
+      {loaded && !friends.length && (
+        <div className="empty-state">
+          <span>
+            <Icon name="friends" />
+          </span>
+          <h3>Друзів поки немає</h3>
+          <p>Запроси першого друга за email — і ви зможете знаходити спільний час.</p>
+        </div>
+      )}
       <div className="friend-grid">
-        {friends.map((f) => {
-          const u = userDto(f.friend);
+        {visible.map((f) => {
+          const u = person(f.friend);
           return (
-            <article className="friend-card" key={u.id}>
-              <Avatar user={u} size="lg" />
-              <h3>
-                {u.firstName} {u.lastName}
-              </h3>
-              <label className="field">
-                <span>Ділитися моєю зайнятістю</span>
+            <article className="friend-card friend-card-v2" key={u.id}>
+              <div className="friend-card-head">
+                <Avatar user={u} size="lg" />
+                <div>
+                  <h3>
+                    {u.firstName} {u.lastName}
+                  </h3>
+                  <p>{u.bio || "У твоєму колі"}</p>
+                </div>
+              </div>
+              <label className="share-toggle">
+                <span>
+                  <b>Ділитися моєю зайнятістю</b>
+                  <small>
+                    {f.shareAvailability
+                      ? "Друг бачить лише зайняті проміжки, без подробиць"
+                      : "Друг не бачить, коли ти зайнята"}
+                  </small>
+                </span>
                 <input
+                  className="switch"
                   type="checkbox"
+                  role="switch"
                   checked={f.shareAvailability}
                   onChange={(e) =>
                     action(() =>
@@ -775,110 +916,291 @@ function ApiFriendsPage({ goFind }: { goFind: (ids?: string[]) => void }) {
                   }
                 />
               </label>
-              <div className="friend-actions">
+              <div className="friend-card-actions">
                 <Button variant="secondary" onClick={() => goFind([u.id])}>
+                  <Icon name="find" size={16} />
                   Знайти час
                 </Button>
-                <Button
-                  variant="danger"
-                  onClick={() => {
-                    if (confirm("Видалити друга?"))
-                      void action(() => api.request(`/api/friends/${u.id}`, { method: "DELETE" }));
-                  }}
+                <button
+                  type="button"
+                  className="icon-button danger-icon"
+                  title="Видалити з друзів"
+                  aria-label={`Видалити ${u.firstName} з друзів`}
+                  onClick={() => setToRemove(u)}
                 >
-                  Видалити
-                </Button>
+                  <Icon name="trash" size={17} />
+                </button>
               </div>
             </article>
           );
         })}
       </div>
+      {toRemove && (
+        <ConfirmDialog
+          title="Видалити з друзів?"
+          danger
+          busy={removing}
+          confirmLabel="Видалити"
+          text={
+            <>
+              <b>
+                {toRemove.firstName} {toRemove.lastName}
+              </b>{" "}
+              зникне зі списку друзів, а спільний пошук часу з цією людиною стане недоступним.
+            </>
+          }
+          onConfirm={() => {
+            setRemoving(true);
+            void action(() => api.request(`/api/friends/${toRemove.id}`, { method: "DELETE" })).finally(
+              () => {
+                setRemoving(false);
+                setToRemove(null);
+              },
+            );
+          }}
+          onClose={() => setToRemove(null)}
+        />
+      )}
     </div>
   );
 }
 
-function GroupControls({ groupId, owner }: { groupId: string; owner: boolean }) {
-  const { users, currentUser } = useStore();
-  async function act(work: () => Promise<unknown>) {
+function GroupControls({ group, owner }: { group: Group; owner: boolean }) {
+  const { users, currentUser, reload } = useStore();
+  const [dialog, setDialog] = useState<"edit" | "add" | "remove" | "leave" | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [friends, setFriends] = useState<User[] | null>(null);
+  const [pendingRemove, setPendingRemove] = useState<string | null>(null);
+  const [name, setName] = useState(group.name);
+  const [description, setDescription] = useState(group.description);
+  const open = (next: typeof dialog) => {
+    setError("");
+    setPendingRemove(null);
+    setName(group.name);
+    setDescription(group.description);
+    setDialog(next);
+  };
+  const close = () => {
+    if (!busy) setDialog(null);
+  };
+  /** Runs an API call, refreshes the store (no page reload) and closes the dialog unless asked not to. */
+  async function act(work: () => Promise<unknown>, keepOpen = false) {
+    setBusy(true);
+    setError("");
     try {
       await work();
-      location.reload();
+      await reload?.();
+      if (!keepOpen) setDialog(null);
     } catch (e) {
-      alert(e instanceof Error ? e.message : "Помилка групи");
+      setError(e instanceof Error ? e.message : "Не вдалося виконати дію.");
+    } finally {
+      setBusy(false);
     }
   }
+  // Only friends can be added, so load them when the dialog opens instead of listing every known user.
+  useEffect(() => {
+    if (dialog !== "add") return;
+    let live = true;
+    setFriends(null);
+    api
+      .request<{ friend: UserDto }[]>("/api/friends?limit=100")
+      .then((rows) => {
+        if (live)
+          setFriends(rows.map((r) => users.find((x) => x.id === r.friend.id) ?? userDto(r.friend)));
+      })
+      .catch((e) => {
+        if (live) {
+          setFriends([]);
+          setError(e instanceof Error ? e.message : "Не вдалося завантажити друзів.");
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [dialog]);
+  const members = group.memberIds
+    .filter((id) => id !== "me" && id !== group.ownerId)
+    .map((id) => users.find((u) => u.id === id))
+    .filter((u): u is User => Boolean(u));
+  const candidates = (friends ?? []).filter((f) => !group.memberIds.includes(f.id));
+  const fullName = (u: User) => `${u.firstName} ${u.lastName}`.trim();
   return (
     <>
-      {owner && (
+      {owner ? (
         <>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              const name = prompt("Нова назва групи");
-              if (name) {
-                const description = prompt("Опис групи") || "";
-                void act(() =>
-                  api.request(`/api/groups/${groupId}`, {
-                    method: "PATCH",
-                    body: JSON.stringify({ name, description }),
-                  }),
-                );
-              }
-            }}
-          >
+          <button type="button" className="manage-btn" onClick={() => open("edit")}>
+            <Icon name="edit" size={15} />
             Редагувати
-          </Button>
-          <select
-            aria-label="Додати учасника"
-            defaultValue=""
-            onChange={(e) => {
-              if (e.target.value)
-                void act(() =>
-                  api.request(`/api/groups/${groupId}/members`, {
-                    method: "POST",
-                    body: JSON.stringify({ userId: e.target.value }),
-                  }),
-                );
-            }}
+          </button>
+          <button type="button" className="manage-btn" onClick={() => open("add")}>
+            <Icon name="plus" size={15} />
+            Додати учасника
+          </button>
+          <button
+            type="button"
+            className="manage-btn"
+            disabled={!members.length}
+            onClick={() => open("remove")}
           >
-            <option value="">Додати учасника</option>
-            {users.slice(1).map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.firstName}
-              </option>
-            ))}
-          </select>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              const userId = prompt(
-                "ID учасника для видалення (видно в списку нижче):\n" +
-                  users
-                    .slice(1)
-                    .map((u) => `${u.firstName}: ${u.id}`)
-                    .join("\n"),
-              );
-              if (userId)
-                void act(() =>
-                  api.request(`/api/groups/${groupId}/members/${userId}`, { method: "DELETE" }),
-                );
-            }}
-          >
+            <Icon name="close" size={15} />
             Видалити учасника
-          </Button>
+          </button>
         </>
+      ) : (
+        <button type="button" className="manage-btn danger" onClick={() => open("leave")}>
+          Вийти з групи
+        </button>
       )}
-      {!owner && (
-        <Button
-          variant="ghost"
-          onClick={() =>
-            act(() =>
-              api.request(`/api/groups/${groupId}/members/${currentUser.id}`, { method: "DELETE" }),
+      {dialog === "edit" && (
+        <Modal title="Редагувати групу" onClose={close}>
+          <form
+            className="form-stack"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!name.trim()) return;
+              void act(() =>
+                api.request(`/api/groups/${group.id}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ name: name.trim(), description }),
+                }),
+              );
+            }}
+          >
+            <label className="field">
+              <span>Назва групи</span>
+              <input autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={120} />
+            </label>
+            <label className="field">
+              <span>Опис</span>
+              <textarea value={description} onChange={(e) => setDescription(e.target.value)} />
+            </label>
+            {error && <p className="form-error">{error}</p>}
+            <div className="modal-actions dialog-actions">
+              <Button type="button" variant="secondary" onClick={close} disabled={busy}>
+                Скасувати
+              </Button>
+              <Button type="submit" disabled={busy || !name.trim()}>
+                {busy ? "Зберігаємо…" : "Зберегти"}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {dialog === "add" && (
+        <Modal title="Додати учасника" onClose={close}>
+          {error && <p className="form-error">{error}</p>}
+          {friends === null ? (
+            <p className="dialog-text">Завантажуємо друзів…</p>
+          ) : candidates.length ? (
+            <ul className="person-list">
+              {candidates.map((u) => (
+                <li key={u.id}>
+                  <Avatar user={u} />
+                  <span>
+                    <b>{fullName(u)}</b>
+                  </span>
+                  <Button
+                    variant="secondary"
+                    disabled={busy}
+                    onClick={() =>
+                      void act(
+                        () =>
+                          api.request(`/api/groups/${group.id}/members`, {
+                            method: "POST",
+                            body: JSON.stringify({ userId: u.id }),
+                          }),
+                        true,
+                      )
+                    }
+                  >
+                    Додати
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="dialog-text">
+              Усі твої друзі вже в цій групі. Нових людей спершу додай на сторінці «Друзі».
+            </p>
+          )}
+          <div className="modal-actions dialog-actions">
+            <Button variant="secondary" onClick={close}>
+              Готово
+            </Button>
+          </div>
+        </Modal>
+      )}
+      {dialog === "remove" && (
+        <Modal title="Видалити учасника" onClose={close}>
+          {error && <p className="form-error">{error}</p>}
+          {members.length ? (
+            <ul className="person-list">
+              {members.map((u) => (
+                <li key={u.id}>
+                  <Avatar user={u} />
+                  <span>
+                    <b>{fullName(u)}</b>
+                  </span>
+                  {pendingRemove === u.id ? (
+                    <span className="person-confirm">
+                      <Button
+                        variant="danger"
+                        disabled={busy}
+                        onClick={() =>
+                          void act(
+                            () =>
+                              api.request(`/api/groups/${group.id}/members/${u.id}`, {
+                                method: "DELETE",
+                              }),
+                            true,
+                          ).then(() => setPendingRemove(null))
+                        }
+                      >
+                        Видалити
+                      </Button>
+                      <Button variant="ghost" disabled={busy} onClick={() => setPendingRemove(null)}>
+                        Ні
+                      </Button>
+                    </span>
+                  ) : (
+                    <Button variant="danger" disabled={busy} onClick={() => setPendingRemove(u.id)}>
+                      Видалити
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="dialog-text">У групі немає інших учасників.</p>
+          )}
+          <div className="modal-actions dialog-actions">
+            <Button variant="secondary" onClick={close}>
+              Закрити
+            </Button>
+          </div>
+        </Modal>
+      )}
+      {dialog === "leave" && (
+        <ConfirmDialog
+          title="Вийти з групи?"
+          danger
+          busy={busy}
+          confirmLabel="Вийти"
+          text={
+            <>
+              Ти залишиш групу <b>«{group.name}»</b>. Повернутися зможеш лише за запрошенням
+              власника.
+              {error && <span className="dialog-error">{error}</span>}
+            </>
+          }
+          onConfirm={() =>
+            void act(() =>
+              api.request(`/api/groups/${group.id}/members/${currentUser.id}`, { method: "DELETE" }),
             )
           }
-        >
-          Вийти з групи
-        </Button>
+          onClose={close}
+        />
       )}
     </>
   );

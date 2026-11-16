@@ -27,6 +27,16 @@ model User {
   notifications Notification[]
   premiumRequests PremiumRequest[]
   uploads UploadedFile[]
+  identities UserIdentity[]
+}
+/// Extra Cognito logins (e.g. Google) linked to an existing account with the same verified email.
+model UserIdentity {
+  subject String @id
+  userId String @db.Uuid
+  user User @relation(fields:[userId], references:[id], onDelete:Cascade)
+  provider String @default("cognito")
+  createdAt DateTime @default(now())
+  @@index([userId])
 }
 model UserProfile {
   userId String @id @db.Uuid

@@ -611,6 +611,37 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
     });
     res.json(request);
   });
+  // Removes a processed application together with its screenshot. Pending applications must be
+  // reviewed first; an active Premium must be revoked first so access is never lost by accident.
+  app.delete("/api/admin/premium-requests/:id", admin, async (req, res) => {
+    const requestId = id.parse(req.params.id);
+    const fileKey = await db.$transaction(async (tx) => {
+      const request = await tx.premiumRequest.findUnique({
+        where: { id: requestId },
+        include: {
+          user: { select: { premiumStatus: true } },
+          screenshot: { select: { key: true } },
+        },
+      });
+      if (!request) throw new HttpError(404, "Заявку не знайдено.");
+      if (request.status === "pending")
+        throw new HttpError(409, "Спершу розгляньте заявку: схваліть або відхиліть її.");
+      if (request.status === "approved" && request.user.premiumStatus === "premium") {
+        const newer = await tx.premiumRequest.findFirst({
+          where: { userId: request.userId, status: "approved", createdAt: { gt: request.createdAt } },
+          select: { id: true },
+        });
+        if (!newer)
+          throw new HttpError(409, "У користувача активний Premium. Спершу відкличте доступ.");
+      }
+      await tx.premiumRequest.delete({ where: { id: request.id } });
+      await tx.uploadedFile.delete({ where: { id: request.screenshotId } });
+      return request.screenshot.key;
+    });
+    // The database is already consistent; a missing file on disk must not fail the request.
+    await storage.remove(fileKey).catch(() => undefined);
+    res.status(204).end();
+  });
   app.delete("/api/admin/users/:id/premium", admin, async (req, res) => {
     const userId = id.parse(req.params.id);
     await db.$transaction(async (tx) => {
@@ -645,7 +676,20 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
   // Turns free text into a proposal. Saves nothing: the user confirms via /proposals/confirm.
   app.post("/api/ai/interpret", aiPerMinute, aiPerDay, async (req, res) => {
     if (!ai) throw new HttpError(503, "AI-помічник не налаштований на сервері.");
-    const { text } = z.object({ text: z.string().trim().min(1).max(1000) }).strict().parse(req.body);
+    const { text, history } = z
+      .object({
+        text: z.string().trim().min(1).max(1000),
+        history: z
+          .array(
+            z
+              .object({ role: z.enum(["user", "assistant"]), text: z.string().trim().min(1).max(1000) })
+              .strict(),
+          )
+          .max(12)
+          .default([]),
+      })
+      .strict()
+      .parse(req.body);
     const user = await me(req.userId);
     const zone = user.profile?.timezone || "UTC";
     const friendships = await db.friendship.findMany({
@@ -664,7 +708,7 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
     const timer = setTimeout(() => controller.abort(), 30_000);
     let raw;
     try {
-      raw = await ai.interpret({ text, nowIso, timezone: zone, friends }, controller.signal);
+      raw = await ai.interpret({ text, history, nowIso, timezone: zone, friends }, controller.signal);
     } catch (error) {
       console.error("AI provider error:", error instanceof Error ? error.message : error);
       throw new HttpError(502, "AI-помічник тимчасово недоступний. Спробуйте ще раз.");
