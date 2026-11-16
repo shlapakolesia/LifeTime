@@ -269,6 +269,7 @@ export function RemoteStoreProvider({ children }: { children: ReactNode }) {
     },
     premiumRequests,
     setPremiumRequests: () => mutate(refresh),
+    reload: refresh,
   };
   // Public pages can render before sign-in. Protected pages never receive fixture data.
   if (isAuthenticated && (loading || !ready))

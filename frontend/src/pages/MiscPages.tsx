@@ -6,6 +6,7 @@ import { Avatar, Button } from "../components/UI";
 import { Icon } from "../components/Icons";
 import { avatarUploadService, validateImage } from "../services/avatarService";
 import { smartSchedulingService, type SmartDraft } from "../services/smartSchedulingService";
+import { aiService, type AiProposal } from "../services/aiService";
 import { calculateAvailabilitySlots } from "../services/availabilityService";
 import { minutes } from "../data";
 
@@ -16,31 +17,78 @@ export function AssistantPage({
   goCalendar: () => void;
   goFind: () => void;
 }) {
-  const { events, setEvents, tasks, setTasks, users, settings } = useStore();
+  const { events, setEvents, tasks, setTasks, users, settings, reload } = useStore();
   const [messages, setMessages] = useState<
     { role: "user" | "ai"; text: string; action?: "calendar" }[]
   >([
     {
       role: "ai",
       text: apiMode
-        ? "AI інтеграцію готує команда. Ви можете користуватися календарем і пошуком часу."
+        ? "Опиши подію або завдання своїми словами. Я підготую пропозицію, а зберігається вона лише після твого підтвердження."
         : "Я аналізую локальні події та завдання за визначеними правилами. Опиши зустріч або завдання для підтвердження.",
     },
   ]);
   const [input, setInput] = useState("");
   const [typing, setTyping] = useState(false);
   const [draft, setDraft] = useState<SmartDraft | null>(null);
-  const answer = (text: string) => {
-    if (apiMode) {
+  const [proposal, setProposal] = useState<AiProposal | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const askAi = async (text: string) => {
+    setMessages((m) => [...m, { role: "user", text }]);
+    setInput("");
+    setProposal(null);
+    setTyping(true);
+    try {
+      const result = await aiService.interpret(text);
+      setMessages((m) => [...m, { role: "ai", text: result.message }]);
+      if (result.type === "proposal") setProposal(result.proposal);
+    } catch (error) {
       setMessages((m) => [
         ...m,
-        { role: "user", text },
         {
           role: "ai",
-          text: "AI інтеграцію ще не підключено. Скористайтеся календарем або пошуком спільного часу.",
+          text: error instanceof Error ? error.message : "Не вдалося отримати відповідь помічника.",
         },
       ]);
-      setInput("");
+    } finally {
+      setTyping(false);
+    }
+  };
+  const confirmProposal = async () => {
+    if (!proposal || confirming) return;
+    setConfirming(true);
+    try {
+      await aiService.confirm(proposal);
+      await reload?.();
+      setMessages((m) => [
+        ...m,
+        {
+          role: "ai",
+          text:
+            proposal.kind === "event"
+              ? `Готово: подію «${proposal.data.title}» створено.`
+              : `Готово: завдання «${proposal.data.title}» додано.`,
+          action: "calendar",
+        },
+      ]);
+    } catch (error) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: "ai",
+          text:
+            (error instanceof Error ? error.message : "Не вдалося зберегти.") +
+            " Нічого не створено. Опиши інший час.",
+        },
+      ]);
+    } finally {
+      setProposal(null);
+      setConfirming(false);
+    }
+  };
+  const answer = (text: string) => {
+    if (apiMode) {
+      void askAi(text);
       return;
     }
     const q = text.toLowerCase();
@@ -216,8 +264,9 @@ export function AssistantPage({
               {tasks.filter((t) => !t.completed).length} активні завдання
             </div>
             <small>
-              Запити обробляються локально за визначеними правилами. Для складніших формулювань
-              помічник попросить уточнення.
+              {apiMode
+                ? "Запити обробляє AI-модель. Помічник лише пропонує, а зміни зберігаються після твого підтвердження."
+                : "Запити обробляються локально за визначеними правилами. Для складніших формулювань помічник попросить уточнення."}
             </small>
           </div>
         </aside>
@@ -230,7 +279,7 @@ export function AssistantPage({
               <div>
                 <b>LifeTime Assistant</b>
                 <small>
-                  <i /> Локальна обробка
+                  <i /> {apiMode ? "AI-модель" : "Локальна обробка"}
                 </small>
               </div>
             </div>
@@ -264,6 +313,15 @@ export function AssistantPage({
                 <i />
                 <i />
               </div>
+            )}
+            {proposal && (
+              <AiProposalCard
+                proposal={proposal}
+                users={users}
+                busy={confirming}
+                onCancel={() => setProposal(null)}
+                onConfirm={() => void confirmProposal()}
+              />
             )}
             {draft && (
               <SmartDraftCard
@@ -301,6 +359,95 @@ export function AssistantPage({
         </section>
       </div>
     </div>
+  );
+}
+
+function AiProposalCard({
+  proposal,
+  users,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  proposal: AiProposal;
+  users: ReturnType<typeof useStore>["users"];
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const format = (iso: string, zone: string) =>
+    new Intl.DateTimeFormat("uk-UA", { dateStyle: "medium", timeStyle: "short", timeZone: zone }).format(
+      new Date(iso),
+    );
+  const zone = proposal.kind === "event" ? proposal.data.timezone : "UTC";
+  const names =
+    proposal.kind === "event"
+      ? proposal.data.participantIds
+          .map((id) => users.find((user) => user.id === id)?.firstName)
+          .filter(Boolean)
+          .join(", ")
+      : "";
+  return (
+    <section className="smart-draft">
+      <div className="smart-draft-head">
+        <span>
+          <Icon name={proposal.kind === "event" ? "calendar" : "tasks"} size={17} />
+        </span>
+        <div>
+          <small>Перевір перед створенням</small>
+          <h3>{proposal.kind === "event" ? "Нова подія" : "Нове завдання"}</h3>
+        </div>
+      </div>
+      <div className="smart-fields">
+        <div className="field span-2">
+          <span>Назва</span>
+          <b>{proposal.data.title}</b>
+        </div>
+        {proposal.kind === "event" ? (
+          <>
+            <div className="field span-2">
+              <span>Час</span>
+              <b>
+                {format(proposal.data.startsAt, zone)} — {format(proposal.data.endsAt, zone)}
+              </b>
+            </div>
+            {names && (
+              <div className="field span-2">
+                <span>Учасники</span>
+                <b>{names}</b>
+              </div>
+            )}
+            {proposal.data.location && (
+              <div className="field span-2">
+                <span>Місце</span>
+                <b>{proposal.data.location}</b>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="field">
+              <span>Пріоритет</span>
+              <b>{proposal.data.priority}</b>
+            </div>
+            {proposal.data.deadline && (
+              <div className="field">
+                <span>Дедлайн</span>
+                <b>{format(proposal.data.deadline, "UTC")}</b>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <div className="smart-actions">
+        <Button variant="ghost" onClick={onCancel} disabled={busy}>
+          Скасувати
+        </Button>
+        <Button onClick={onConfirm} disabled={busy}>
+          {busy ? "Зберігаємо…" : "Підтвердити й створити"}
+        </Button>
+      </div>
+    </section>
   );
 }
 
