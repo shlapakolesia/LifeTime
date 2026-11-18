@@ -306,7 +306,7 @@ databaseTest("Premium assistant shows real availability and only saves an overla
 });
 
 for (const [query, reply] of [
-  ["Коли я вільна 18 листопада?", "18 листопада 2026: 09:00–14:00, 16:00–20:00."],
+  ["Коли я вільна 18 листопада 2026?", "18 листопада 2026: 09:00–14:00, 16:00–20:00."],
   ["Додай завдання", "Яка назва завдання?"],
 ]) {
   databaseTest(`AI clears an unrelated pending proposal after: ${query}`, async () => {

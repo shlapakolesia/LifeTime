@@ -519,3 +519,119 @@ for (const { name, first, second, repeated = false } of [
     assert.equal(tasks, Number(first === "tasks"));
   });
 }
+
+test("clear personal availability bypasses the provider and preserves the date for duration follow-ups", {
+  skip: process.env.RUN_DB_TESTS !== "true",
+}, async (t) => {
+  const previousNow = Settings.now;
+  Settings.now = () => Date.parse("2026-11-21T11:00:00Z");
+  t.after(() => { Settings.now = previousNow; });
+  const zone = "Pacific/Kiritimati";
+  const email = `availability-${randomUUID()}@lifetime.local`;
+  const user = await db.user.create({
+    data: {
+      email, subject: `local:${email}`, premiumStatus: "premium",
+      profile: { create: {
+        firstName: "Тест", lastName: "Календар", timezone: zone,
+        activeStart: "09:00", activeEnd: "10:00",
+      } },
+    },
+  });
+  await db.calendarEvent.createMany({
+    data: [
+      ["19:10", "19:30"],
+      ["19:20", "19:45"],
+    ].map(([start, end]) => ({
+      ownerId: user.id, title: "Приватна подія", timezone: zone,
+      startsAt: new Date(`2026-11-21T${start}:00Z`),
+      endsAt: new Date(`2026-11-21T${end}:00Z`),
+    })),
+  });
+  const providerCalls: string[] = [];
+  const app = createApp(undefined, {
+    name: "integration-contract",
+    async interpret({ text }) {
+      providerCalls.push(text);
+      return {
+        type: "clarification",
+        message: text.startsWith("Додай")
+          ? "На коли запланувати подію?"
+          : "Я не маю доступу до твого календаря.",
+      };
+    },
+  });
+  const ask = (text: string, history: { role: string; text: string }[] = [], server = app) =>
+    request(server).post("/api/ai/interpret").set("Authorization", `Bearer dev:${email}`)
+      .send({ text, history }).expect(200);
+  const question = "Коли я вільна 22 листопада?";
+  const answer = (await ask(question)).body;
+  assert.equal(answer.type, "availability");
+  assert.deepEqual(answer.availability.days, [{
+    date: "2026-11-22",
+    free: [{ start: "09:00", end: "09:10" }, { start: "09:45", end: "10:00" }],
+  }]);
+  assert.equal(answer.availability.timezone, zone);
+  assert.doesNotMatch(answer.message, /Приватна подія|не маю доступу/);
+  const history = [
+    { role: "user", text: question },
+    { role: "assistant", text: answer.message },
+  ];
+  for (const result of [
+    await ask("Коли є вільний час, треба 15 хвилин", history),
+    await ask("Знайди 15 хвилин вільного часу 22 листопада."),
+  ]) assert.deepEqual(result.body.availability.days, [{
+    date: "2026-11-22", free: [{ start: "09:45", end: "10:00" }],
+  }]);
+  const noFit = (await ask("Знайди 16 хвилин вільного часу 22 листопада.")).body;
+  assert.deepEqual(noFit.availability.days[0].free, []);
+  assert.match(noFit.message, /немає вільного проміжку/);
+  assert.deepEqual((await ask("Які в мене вільні години сьогодні?", [], createApp(undefined, null))).body.availability.days,
+    answer.availability.days);
+  assert.deepEqual((await ask("Коли я вільна завтра?")).body.availability.days, [{
+    date: "2026-11-23", free: [{ start: "09:00", end: "10:00" }],
+  }]);
+  assert.deepEqual(providerCalls, []);
+  await ask("Додай подію на 22 листопада");
+  const ambiguous = await ask("Чи вільна Софія 22 листопада?");
+  assert.equal(ambiguous.body.type, "clarification");
+  assert.doesNotMatch(ambiguous.body.message, /не маю доступу/);
+  assert.deepEqual(providerCalls, ["Додай подію на 22 листопада", "Чи вільна Софія 22 листопада?"]);
+  assert.equal(await db.calendarEvent.count({ where: { ownerId: user.id } }), 2);
+});
+
+test("participant and time constraints never become unrestricted personal availability", {
+  skip: process.env.RUN_DB_TESTS !== "true",
+}, async () => {
+  const email = `availability-constraints-${randomUUID()}@lifetime.local`;
+  await db.user.create({
+    data: {
+      email, subject: `local:${email}`, premiumStatus: "premium",
+      profile: { create: { firstName: "Тест", lastName: "Календар" } },
+    },
+  });
+  const providerCalls: string[] = [];
+  const server = createApp(undefined, {
+    name: "integration-contract",
+    async interpret({ text }) {
+      providerCalls.push(text);
+      // Simulate the model dropping the participant or clock range.
+      return { type: "availability", period: "tomorrow" };
+    },
+  });
+  const direct = [
+    "Коли я вільна завтра з олесею?",
+    "Коли я вільна завтра з другом?",
+    "Коли я вільна 22 листопада після 18:00?",
+    "Коли я вільна завтра до 12:00?",
+  ];
+  const fallback = ["Чи вільна я завтра з олесею?", "Чи я вільна завтра о 18:00?"];
+  for (const text of [...direct, ...fallback]) {
+    const { body } = await request(server).post("/api/ai/interpret")
+      .set("Authorization", `Bearer dev:${email}`).send({ text }).expect(200);
+    assert.equal(body.type, "clarification", text);
+    assert.match(body.message, text.includes(":") ? /потрібні години/ : /спільного часу/);
+    assert.equal(body.availability, undefined);
+    assert.equal(body.proposal, undefined);
+  }
+  assert.deepEqual(providerCalls, fallback);
+});

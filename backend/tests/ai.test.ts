@@ -130,3 +130,48 @@ test("availability action resolves calendar periods and omitted years from the l
   assert.deepEqual(resolveAvailabilityDate(range("2025-11-18"), now), range("2025-11-18"));
   assert.throws(() => normalizeRaw({ type: "availability", month: 2, day: 30 }), AiOutputError);
 });
+
+test("deterministic routing recognizes only clear personal availability requests", async () => {
+  const { personalAvailabilityIntent } = await import("../src/services/availabilityIntent.js");
+  for (const text of [
+    "Коли я вільна 22 листопада?",
+    "Покажи мій вільний час на 22 листопада.",
+    "Коли я вільна завтра?",
+    "Які в мене вільні години сьогодні?",
+    "Знайди 15 хвилин вільного часу 22 листопада.",
+    "Коли я можу зайнятися лабораторною 22 листопада?",
+  ]) assert.ok(personalAvailabilityIntent(text, [])?.date, text);
+  for (const text of [
+    "Заплануй зустріч 22 листопада, коли я вільна",
+    "Коли я вільна завтра? Заплануй зустріч",
+    "Коли є вільний час з Олесею завтра?",
+    "Коли я вільна 22 листопада або 23?",
+    "Коли я вільна 31 листопада?",
+    "Коли я вільна післязавтра?",
+  ]) assert.equal(personalAvailabilityIntent(text, []), null, text);
+  assert.equal(personalAvailabilityIntent("Коли є вільний час, треба 15 хвилин", [
+    { role: "user", text: "Коли я вільна 22 листопада?" },
+    { role: "user", text: "Створи завдання" },
+  ])?.date, undefined);
+});
+
+test("personal availability rejects participant references and clock constraints", async () => {
+  const { availabilityClarification, personalAvailabilityIntent } =
+    await import("../src/services/availabilityIntent.js");
+  for (const text of [
+    "Коли я вільна завтра з олесею?",
+    "Коли я вільна завтра з другом?",
+    "Коли я вільна завтра зі своєю подругою?",
+    "Коли я вільна 22 листопада після 18:00?",
+    "Коли я вільна завтра до 12:00?",
+    "Коли я вільна завтра після шостої?",
+    "Які в мене вільні години сьогодні ввечері?",
+  ]) {
+    assert.equal(personalAvailabilityIntent(text, []), null, text);
+    assert.ok(availabilityClarification(text, true), text);
+  }
+  assert.equal(availabilityClarification("Заплануй зустріч завтра з Олесею о 18:00", true), undefined);
+  assert.deepEqual(personalAvailabilityIntent("Коли є вільний час, треба 15 хвилин", [
+    { role: "user", text: "Коли я вільна завтра до 12:00?" },
+  ]), { date: undefined, durationMinutes: 15 });
+});

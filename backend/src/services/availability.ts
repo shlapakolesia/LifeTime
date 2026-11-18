@@ -86,6 +86,7 @@ export async function personalAvailability(
   viewer: string,
   range: z.infer<typeof calendarRange>,
   profile: { timezone: string; activeStart: string; activeEnd: string },
+  durationMinutes = 0,
 ) {
   const { timezone: zone, activeStart, activeEnd } = profile;
   const from = DateTime.fromISO(range.startDate, { zone }).startOf("day");
@@ -96,10 +97,12 @@ export async function personalAvailability(
     const date = day.toISODate()!;
     const start = DateTime.fromISO(`${date}T${activeStart}`, { zone });
     const end = DateTime.fromISO(`${date}T${activeEnd}`, { zone });
-    const free = freeIntervals(+start, +end, busy).map(({ start, end }) => ({
-      start: DateTime.fromMillis(start, { zone }).toFormat("HH:mm"),
-      end: DateTime.fromMillis(end, { zone }).toFormat("HH:mm"),
-    }));
+    const free = freeIntervals(+start, +end, busy)
+      .filter(({ start, end }) => end - start >= durationMinutes * 60_000)
+      .map(({ start, end }) => ({
+        start: DateTime.fromMillis(start, { zone }).toFormat("HH:mm"),
+        end: DateTime.fromMillis(end, { zone }).toFormat("HH:mm"),
+      }));
     days.push({ date, free });
   }
   return { timezone: zone, activeStart, activeEnd, days };

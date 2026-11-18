@@ -21,6 +21,8 @@ import {
 import { storage, validateImage } from "./services/storage.js";
 import { availabilityDate, createAiProvider, resolveAvailabilityDate, type AiProvider } from "./services/ai.js";
 
+import { availabilityClarification, personalAvailabilityIntent } from "./services/availabilityIntent.js";
+
 const overlapWarning =
   "У цей час у твоєму календарі вже є запланована подія. Ти можеш створити нову подію попри накладку або вибрати інший час.";
 
@@ -698,9 +700,8 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
     z.object({ kind: z.literal("event"), data: eventInput }),
     z.object({ kind: z.literal("task"), data: taskInput }),
   ]);
-  // Turns free text into a proposal. Saves nothing: the user confirms via /proposals/confirm.
+  // Answers calendar queries or interprets free text. Writes require /proposals/confirm.
   app.post("/api/ai/interpret", aiPerMinute, aiPerDay, async (req, res) => {
-    if (!ai) throw new HttpError(503, "AI-помічник не налаштований на сервері.");
     const { text, history } = z
       .object({
         text: z.string().trim().min(1).max(1000),
@@ -717,6 +718,41 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
       .parse(req.body);
     const user = await me(req.userId);
     const zone = user.profile?.timezone || "UTC";
+    const now = DateTime.now().setZone(zone);
+    async function sendAvailability(date: z.infer<typeof availabilityDate>, durationMinutes?: number) {
+      if (!user.profile || !now.isValid)
+        throw new HttpError(503, "Не вдалося отримати налаштування календаря.");
+      const range = resolveAvailabilityDate(date, now);
+      const availability = await personalAvailability(req.userId, range, user.profile, durationMinutes).catch(() => {
+        throw new HttpError(503, "Не вдалося завантажити календар. Спробуй ще раз трохи пізніше.");
+      });
+      const lines = availability.days.map(({ date, free }) => {
+        const label = DateTime.fromISO(date, { zone }).setLocale("uk").toFormat("d MMMM yyyy");
+        const times = free.map(({ start, end }) => `${start}–${end}`).join(", ");
+        const noTime = durationMinutes
+          ? `немає вільного проміжку тривалістю щонайменше ${durationMinutes} хв.`
+          : "вільного часу немає.";
+        return `${label}: ${times ? `${times}.` : noTime}`;
+      });
+      res.json({
+        type: "availability",
+        availability,
+        message: `Вільний час у межах активних годин (${availability.timezone}):
+${lines.join("\n")}`,
+      });
+    }
+    const clarification = availabilityClarification(text, true);
+    if (clarification) {
+      res.json({ type: "clarification", message: clarification });
+      return;
+    }
+    const request = personalAvailabilityIntent(text, history);
+    if (request) {
+      if (request.date) await sendAvailability(request.date, request.durationMinutes);
+      else res.json({ type: "clarification", message: "На яку дату перевірити вільний час?" });
+      return;
+    }
+    if (!ai) throw new HttpError(503, "AI-помічник не налаштований на сервері.");
     const friendships = await db.friendship.findMany({
       where: { ownerId: req.userId },
       include: { friend: { select: { id: true, profile: true } } },
@@ -728,7 +764,6 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
         name: `${f.friend.profile?.firstName ?? ""} ${f.friend.profile?.lastName ?? ""}`.trim(),
       }))
       .filter((f) => f.name);
-    const now = DateTime.now().setZone(zone);
     const nowIso = now.toISO({ suppressMilliseconds: true }) ?? new Date().toISOString();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30_000);
@@ -742,28 +777,23 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
       clearTimeout(timer);
     }
     if (raw.type === "clarification") {
-      res.json({ type: "clarification", message: raw.message });
+      const deniesCalendarAccess = /(?:не маю|немає|не можу отримати)\s+(?:прямого\s+)?доступ\p{L}*[^.!?]*календар/iu.test(raw.message);
+      res.json({
+        type: "clarification",
+        message: deniesCalendarAccess
+          ? "Уточни, будь ласка, чий вільний час і за який період потрібно перевірити."
+          : raw.message,
+      });
       return;
     }
     if (raw.type === "availability") {
+      const clarification = availabilityClarification(text);
+      if (clarification) {
+        res.json({ type: "clarification", message: clarification });
+        return;
+      }
       const { type, ...dates } = raw;
-      if (!user.profile || !now.isValid)
-        throw new HttpError(503, "Не вдалося отримати налаштування календаря.");
-      const range = resolveAvailabilityDate(availabilityDate.parse(dates), now);
-      const availability = await personalAvailability(req.userId, range, user.profile).catch(() => {
-        throw new HttpError(503, "Не вдалося завантажити календар. Спробуй ще раз трохи пізніше.");
-      });
-      const lines = availability.days.map(({ date, free }) => {
-        const label = DateTime.fromISO(date, { zone }).setLocale("uk").toFormat("d MMMM yyyy");
-        const times = free.map(({ start, end }) => `${start}–${end}`).join(", ");
-        return times ? `${label}: ${times}.` : `${label}: вільного часу немає.`;
-      });
-      res.json({
-        type,
-        availability,
-        message: `Вільний час у межах активних годин (${availability.timezone}):
-${lines.join("\n")}`,
-      });
+      await sendAvailability(availabilityDate.parse(dates));
       return;
     }
     const parsed = aiProposal.safeParse(raw.proposal);
