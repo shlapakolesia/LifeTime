@@ -6,6 +6,7 @@ import { Avatar, Button } from "../components/UI";
 import { Icon } from "../components/Icons";
 import { avatarUploadService, validateImage } from "../services/avatarService";
 import { smartSchedulingService, type SmartDraft } from "../services/smartSchedulingService";
+import { isEventOverlap } from "../services/apiClient";
 import { aiService, type AiHistoryTurn, type AiProposal } from "../services/aiService";
 import { calculateAvailabilitySlots } from "../services/availabilityService";
 import { minutes } from "../data";
@@ -24,15 +25,22 @@ export function AssistantPage({
     {
       role: "ai",
       text: apiMode
-        ? "Опиши подію або завдання своїми словами. Я підготую пропозицію, а зберігається вона лише після твого підтвердження."
+        ? "Запитай про вільний час або опиши подію чи завдання своїми словами. Я підготую пропозицію, а зберігається вона лише після твого підтвердження."
         : "Я аналізую локальні події та завдання за визначеними правилами. Опиши зустріч або завдання для підтвердження.",
     },
   ]);
   const [input, setInput] = useState("");
   const [typing, setTyping] = useState(false);
   const [draft, setDraft] = useState<SmartDraft | null>(null);
-  const [proposal, setProposal] = useState<AiProposal | null>(null);
+  const [pending, setPending] = useState<{
+    proposal: AiProposal;
+    overlap: boolean;
+    requestId?: string;
+  } | null>(null);
+  const proposal = pending?.proposal;
   const [confirming, setConfirming] = useState(false);
+  const requestInFlight = useRef(false);
+  const chatInput = useRef<HTMLInputElement>(null);
   const messagesBox = useRef<HTMLDivElement>(null);
   // Keep the newest message in view; only the message list scrolls, never the whole page.
   useEffect(() => {
@@ -40,6 +48,9 @@ export function AssistantPage({
     if (box) box.scrollTo({ top: box.scrollHeight, behavior: "smooth" });
   }, [messages, typing, proposal, draft]);
   const askAi = async (text: string) => {
+    if (requestInFlight.current) return;
+    requestInFlight.current = true;
+    setPending(null);
     // The first message is the static greeting; buttons and confirmations are not part of the dialogue.
     const history: AiHistoryTurn[] = messages
       .slice(1)
@@ -48,12 +59,17 @@ export function AssistantPage({
       .map((m) => ({ role: m.role === "ai" ? "assistant" : "user", text: m.text.slice(0, 1000) }));
     setMessages((m) => [...m, { role: "user", text }]);
     setInput("");
-    setProposal(null);
     setTyping(true);
     try {
       const result = await aiService.interpret(text, history);
       setMessages((m) => [...m, { role: "ai", text: result.message }]);
-      if (result.type === "proposal") setProposal(result.proposal);
+      if (result.type === "proposal") {
+        setPending({
+          proposal: result.proposal,
+          overlap: result.overlap,
+          requestId: result.proposal.kind === "event" ? crypto.randomUUID() : undefined,
+        });
+      }
     } catch (error) {
       setMessages((m) => [
         ...m,
@@ -63,15 +79,27 @@ export function AssistantPage({
         },
       ]);
     } finally {
+      requestInFlight.current = false;
       setTyping(false);
     }
   };
   const confirmProposal = async () => {
-    if (!proposal || confirming) return;
+    if (!pending || requestInFlight.current) return;
+    const { proposal, requestId, overlap } = pending;
+    requestInFlight.current = true;
     setConfirming(true);
     try {
-      await aiService.confirm(proposal);
-      await reload?.();
+      try {
+        await aiService.confirm(proposal, requestId, overlap);
+      } catch (error) {
+        if (isEventOverlap(error)) setPending({ ...pending, overlap: true });
+        setMessages((m) => [
+          ...m,
+          { role: "ai", text: error instanceof Error ? error.message : "Не вдалося зберегти." },
+        ]);
+        return;
+      }
+      setPending(null);
       setMessages((m) => [
         ...m,
         {
@@ -83,18 +111,16 @@ export function AssistantPage({
           action: "calendar",
         },
       ]);
-    } catch (error) {
-      setMessages((m) => [
-        ...m,
-        {
-          role: "ai",
-          text:
-            (error instanceof Error ? error.message : "Не вдалося зберегти.") +
-            " Нічого не створено. Опиши інший час.",
-        },
-      ]);
+      try {
+        await reload?.();
+      } catch {
+        setMessages((m) => [
+          ...m,
+          { role: "ai", text: "Не вдалося оновити календар. Онови сторінку, щоб побачити зміни." },
+        ]);
+      }
     } finally {
-      setProposal(null);
+      requestInFlight.current = false;
       setConfirming(false);
     }
   };
@@ -304,7 +330,9 @@ export function AssistantPage({
             {messages.map((m, i) => (
               <div key={i} className={`message ${m.role}`}>
                 <div className="message-bubble">
-                  {m.text}
+                  {m.text.split("\n").map((line, index) => (
+                    <span key={index}>{index > 0 && <br />}{line}</span>
+                  ))}
                   {m.role === "ai" && m.text.includes("Знайти час") && (
                     <Button variant="secondary" onClick={goFind}>
                       Відкрити пошук часу
@@ -326,12 +354,18 @@ export function AssistantPage({
                 <i />
               </div>
             )}
-            {proposal && (
+            {pending && (
               <AiProposalCard
-                proposal={proposal}
+                proposal={pending.proposal}
                 users={users}
                 busy={confirming}
-                onCancel={() => setProposal(null)}
+                overlap={pending.overlap}
+                onChooseTime={() => {
+                  setPending(null);
+                  setMessages((m) => [...m, { role: "ai", text: "На який інший час запланувати цю подію?" }]);
+                  chatInput.current?.focus();
+                }}
+                onCancel={() => setPending(null)}
                 onConfirm={() => void confirmProposal()}
               />
             )}
@@ -360,6 +394,7 @@ export function AssistantPage({
             }}
           >
             <input
+              ref={chatInput}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               placeholder="Запитай про свій розклад…"
@@ -378,12 +413,16 @@ function AiProposalCard({
   proposal,
   users,
   busy,
+  overlap,
+  onChooseTime,
   onCancel,
   onConfirm,
 }: {
   proposal: AiProposal;
   users: ReturnType<typeof useStore>["users"];
   busy: boolean;
+  overlap: boolean;
+  onChooseTime: () => void;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -451,12 +490,17 @@ function AiProposalCard({
           </>
         )}
       </div>
-      <div className="smart-actions">
+      <div className={overlap ? "smart-actions flex-wrap" : "smart-actions"}>
         <Button variant="ghost" onClick={onCancel} disabled={busy}>
           Скасувати
         </Button>
+        {overlap && (
+          <Button variant="secondary" onClick={onChooseTime} disabled={busy}>
+            Обрати інший час
+          </Button>
+        )}
         <Button onClick={onConfirm} disabled={busy}>
-          {busy ? "Зберігаємо…" : "Підтвердити й створити"}
+          {busy ? "Зберігаємо…" : overlap ? "Створити попри накладку" : "Підтвердити й створити"}
         </Button>
       </div>
     </section>

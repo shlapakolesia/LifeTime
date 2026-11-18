@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { DateTime } from "luxon";
 import {
   AiOutputError,
   buildConversation,
@@ -8,6 +9,7 @@ import {
   createMockProvider,
   extractJson,
   normalizeRaw,
+  resolveAvailabilityDate,
   type AiContext,
 } from "../src/services/ai.js";
 
@@ -25,7 +27,7 @@ test("extractJson tolerates fences and surrounding prose, rejects garbage", () =
   assert.throws(() => extractJson("{broken"), AiOutputError);
 });
 
-test("normalizeRaw accepts only the two envelopes", () => {
+test("normalizeRaw accepts the proposal and clarification envelopes", () => {
   assert.deepEqual(normalizeRaw({ type: "clarification", message: " На який день? " }), {
     type: "clarification",
     message: "На який день?",
@@ -36,7 +38,7 @@ test("normalizeRaw accepts only the two envelopes", () => {
   for (const bad of [null, "x", [], { type: "proposal" }, { type: "proposal", proposal: "x" }, { type: "clarification" }, { type: "other", message: "x" }])
     assert.throws(() => normalizeRaw(bad), AiOutputError);
   const long = normalizeRaw({ type: "clarification", message: "я".repeat(900) });
-  assert.equal(long.message.length, 500);
+  assert.equal(long.type === "clarification" && long.message.length, 500);
 });
 
 test("system prompt carries time, zone and friend ids but no emails", () => {
@@ -100,4 +102,31 @@ test("conversation always starts and ends with a user turn and merges equal role
   );
   assert.equal(turns[0].text, "a\nb");
   assert.equal(buildConversation({ text: "x" }).length, 1);
+});
+
+test("availability action only accepts a bounded inclusive date range and no identity", () => {
+  const action = { type: "availability", startDate: "2026-11-18", endDate: "2026-11-18" };
+  assert.deepEqual(normalizeRaw(action), action);
+  assert.throws(() => normalizeRaw({ ...action, userId: context("").friends[0].id }), AiOutputError);
+  assert.throws(() => normalizeRaw({ ...action, endDate: "2027-11-18" }), AiOutputError);
+  assert.throws(() => normalizeRaw({ ...action, endDate: "2026-11-17" }), AiOutputError);
+  assert.throws(() => normalizeRaw({ ...action, startDate: "2026-02-29" }), AiOutputError);
+  const prompt = buildSystemPrompt(context("Коли я вільна 18 листопада?"));
+  for (const rule of ["сьогодні", "завтра", "наступного понеділка", "цього тижня", "next occurrence including today"])
+    assert.ok(prompt.includes(rule));
+});
+
+test("availability action resolves calendar periods and omitted years from the local date", () => {
+  const now = DateTime.fromISO("2026-11-17T11:00:00Z").setZone("Pacific/Kiritimati");
+  const range = (startDate: string, endDate = startDate) => ({ startDate, endDate });
+  assert.deepEqual(resolveAvailabilityDate({ period: "today" }, now), range("2026-11-18"));
+  assert.deepEqual(resolveAvailabilityDate({ period: "tomorrow" }, now), range("2026-11-19"));
+  assert.deepEqual(resolveAvailabilityDate({ period: "nextMonday" }, now), range("2026-11-23"));
+  assert.deepEqual(resolveAvailabilityDate({ period: "nextMonday" }, now.plus({ days: 5 })), range("2026-11-30"));
+  assert.deepEqual(resolveAvailabilityDate({ period: "thisWeek" }, now), range("2026-11-16", "2026-11-22"));
+  assert.deepEqual(resolveAvailabilityDate({ month: 11, day: 18 }, now), range("2026-11-18"));
+  assert.deepEqual(resolveAvailabilityDate({ month: 11, day: 18 }, now.plus({ days: 1 })), range("2027-11-18"));
+  assert.deepEqual(resolveAvailabilityDate({ month: 2, day: 29 }, now), range("2028-02-29"));
+  assert.deepEqual(resolveAvailabilityDate(range("2025-11-18"), now), range("2025-11-18"));
+  assert.throws(() => normalizeRaw({ type: "availability", month: 2, day: 30 }), AiOutputError);
 });

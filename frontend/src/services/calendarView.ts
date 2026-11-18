@@ -1,4 +1,5 @@
 import type { CalendarEvent, Task } from "../types";
+import { minutes } from "../data";
 import { eventDto } from "./dto";
 
 /** Task sessions are projected for display only; no duplicate event is saved. */
@@ -47,4 +48,34 @@ export function onCalendarDate(event: CalendarEvent, date: string): CalendarEven
     start: date === event.date ? event.start : "00:00",
     end: date === endDate ? event.end : "23:59",
   };
+}
+
+// Partition by the rendered vertical bounds, including the minimum block height.
+export function placeCalendarEntries(events: CalendarEvent[]) {
+  const blocks = events.map((event) => ({
+    event,
+    top: Math.max(0, ((minutes(event.start) - 480) / 840) * 100),
+    height: Math.max(5, ((minutes(event.end) - minutes(event.start)) / 840) * 100),
+    column: 0,
+    columns: 1,
+  })).sort((a, b) => a.top - b.top);
+
+  let groupStart = 0;
+  let columnEnds: number[] = [];
+  const setWidths = (end: number) => {
+    for (let index = groupStart; index < end; index++)
+      blocks[index].columns = columnEnds.length;
+  };
+  for (const [index, block] of blocks.entries()) {
+    if (columnEnds.every((end) => end <= block.top)) {
+      setWidths(index);
+      groupStart = index;
+      columnEnds = [];
+    }
+    const freeColumn = columnEnds.findIndex((end) => end <= block.top);
+    block.column = freeColumn === -1 ? columnEnds.length : freeColumn;
+    columnEnds[block.column] = block.top + block.height;
+  }
+  setWidths(blocks.length);
+  return blocks;
 }

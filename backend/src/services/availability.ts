@@ -1,7 +1,8 @@
+import type { Prisma } from "@prisma/client";
 import { DateTime } from "luxon";
 import { db } from "./database.js";
 import type { z } from "zod";
-import { availabilityInput } from "../validators/index.js";
+import { availabilityInput, calendarRange } from "../validators/index.js";
 export class HttpError extends Error {
   constructor(
     public status: number,
@@ -31,7 +32,7 @@ export function freeIntervals(start: number, end: number, busy: Interval[]): Int
   if (cursor < end) result.push({ start: cursor, end });
   return result;
 }
-export async function requireAvailability(viewer: string, ids: string[], client = db) {
+export async function requireAvailability(viewer: string, ids: string[], client: Pick<Prisma.TransactionClient, "userProfile" | "friendship" | "groupMember"> = db) {
   for (const userId of [...new Set(ids)].filter((id) => id !== viewer)) {
     const target = await client.userProfile.findUnique({ where: { userId } });
     const permission = await client.friendship.findUnique({
@@ -50,11 +51,12 @@ export async function getBusy(
   ids: string[],
   start: Date,
   end: Date,
-  client = db,
+  client: Pick<Prisma.TransactionClient, "calendarEvent" | "task"> = db,
   exclude?: { eventId?: string; taskId?: string },
 ): Promise<Interval[]> {
   const [events, tasks] = await Promise.all([
     client.calendarEvent.findMany({
+      select: { id: true, startsAt: true, endsAt: true },
       where: {
         OR: [{ ownerId: { in: ids } }, { participants: { some: { userId: { in: ids } } } }],
         startsAt: { lt: end },
@@ -62,6 +64,7 @@ export async function getBusy(
       },
     }),
     client.task.findMany({
+      select: { id: true, scheduledStart: true, scheduledEnd: true },
       where: {
         ownerId: { in: ids },
         completed: false,
@@ -79,6 +82,29 @@ export async function getBusy(
       .map((t) => ({ start: +t.scheduledStart!, end: +t.scheduledEnd! })),
   ];
 }
+export async function personalAvailability(
+  viewer: string,
+  range: z.infer<typeof calendarRange>,
+  profile: { timezone: string; activeStart: string; activeEnd: string },
+) {
+  const { timezone: zone, activeStart, activeEnd } = profile;
+  const from = DateTime.fromISO(range.startDate, { zone }).startOf("day");
+  const until = DateTime.fromISO(range.endDate, { zone }).plus({ days: 1 }).startOf("day");
+  const busy = await getBusy([viewer], from.toJSDate(), until.toJSDate());
+  const days = [];
+  for (let day = from; day < until; day = day.plus({ days: 1 })) {
+    const date = day.toISODate()!;
+    const start = DateTime.fromISO(`${date}T${activeStart}`, { zone });
+    const end = DateTime.fromISO(`${date}T${activeEnd}`, { zone });
+    const free = freeIntervals(+start, +end, busy).map(({ start, end }) => ({
+      start: DateTime.fromMillis(start, { zone }).toFormat("HH:mm"),
+      end: DateTime.fromMillis(end, { zone }).toFormat("HH:mm"),
+    }));
+    days.push({ date, free });
+  }
+  return { timezone: zone, activeStart, activeEnd, days };
+}
+
 export async function findAvailability(viewer: string, input: z.infer<typeof availabilityInput>) {
   const ids = [...new Set([viewer, ...input.participantIds])];
   await requireAvailability(viewer, ids);

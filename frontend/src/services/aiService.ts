@@ -34,8 +34,8 @@ export interface AiHistoryTurn {
 }
 
 export type AiInterpretResult =
-  | { type: "proposal"; message: string; proposal: AiProposal }
-  | { type: "clarification"; message: string };
+  | { type: "proposal"; message: string; proposal: AiProposal; overlap: boolean }
+  | { type: "clarification" | "availability"; message: string };
 
 /** The model only proposes. Nothing is saved until confirm() is called after the user agrees. */
 export const aiService = {
@@ -45,9 +45,13 @@ export const aiService = {
       method: "POST",
       body: JSON.stringify({ text, history }),
     }),
-  confirm: (proposal: AiProposal) =>
+  confirm: (proposal: AiProposal, requestId: string | undefined, confirmOverlap: boolean) =>
     api.request<unknown>("/api/ai/proposals/confirm", {
       method: "POST",
-      body: JSON.stringify(proposal),
+      body: JSON.stringify(
+        proposal.kind === "event"
+          ? { ...proposal, data: { ...proposal.data, requestId, confirmOverlap } }
+          : proposal,
+      ),
     }),
 };

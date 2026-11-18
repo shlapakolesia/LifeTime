@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type SetStateAction } from "react";
 import { StoreContext, type Store } from "./store";
 import { useAuth } from "./auth/AuthProvider";
-import { api, privateImage } from "./services/apiClient";
+import { api, isEventOverlap, privateImage } from "./services/apiClient";
 import {
   userDto,
   eventDto,
@@ -131,7 +131,7 @@ export function RemoteStoreProvider({ children }: { children: ReactNode }) {
       await work();
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Помилка API");
+      if (!isEventOverlap(e)) setError(e instanceof Error ? e.message : "Помилка API");
       throw e;
     }
   }
@@ -205,6 +205,8 @@ export function RemoteStoreProvider({ children }: { children: ReactNode }) {
         privacy: e.privacy,
         participantIds: e.participantIds.filter((i) => i !== "me"),
         recheckAvailability: e.recheckAvailability || false,
+        confirmOverlap: e.confirmOverlap,
+        requestId: e.requestId,
       })),
     tasks,
     setTasks: (change) =>

@@ -52,6 +52,8 @@ export interface CalendarEvent {
   startsAt?: string;
   endsAt?: string;
   recheckAvailability?: boolean;
+  confirmOverlap?: boolean;
+  requestId?: string;
   recurrence?: string;
 }
 

@@ -1,5 +1,8 @@
+import { apiMode } from "../config";
+import { isEventOverlap } from "../services/apiClient";
+import { calendarEntries } from "../services/calendarView";
 import { toInstant, wallDateTime } from "../services/dto";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { addDays } from "../data";
 import { useStore } from "../store";
 import type { CalendarEvent, EventCategory, Task, User } from "../types";
@@ -147,7 +150,7 @@ export function EventModal({
   onClose: () => void;
   onSaved: (message: string) => void;
 }) {
-  const { events, setEvents, users, currentUser } = useStore();
+  const { events, setEvents, tasks, users, currentUser } = useStore();
   const canEdit =
     !event || (!event.sourceTaskId && (event.ownerId === "me" || event.ownerId === currentUser.id));
   const [form, setForm] = useState<Omit<CalendarEvent, "id">>({
@@ -157,25 +160,55 @@ export function EventModal({
   });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const set = (key: keyof typeof form, value: unknown) =>
+  const [overlap, setOverlap] = useState("");
+  const savingRef = useRef(false);
+  const requestId = useRef<string | undefined>(undefined);
+  const set = (key: keyof typeof form, value: unknown) => {
+    if (savingRef.current) return;
+    requestId.current = undefined;
     setForm((old) => ({ ...old, [key]: value }));
-  const save = async () => {
-    if (saving) return;
+  };
+  const save = async (confirmOverlap = false) => {
+    if (savingRef.current || !canEdit) return;
     if (!form.title.trim()) return setError("Додайте назву події.");
-    if (`${form.endDate || form.date}T${form.end}` <= `${form.date}T${form.start}`)
-      return setError("Час завершення має бути пізніше за початок.");
+    const start = `${form.date}T${form.start}`;
+    const end = `${form.endDate || form.date}T${form.end}`;
+    if (end <= start) return setError("Час завершення має бути пізніше за початок.");
+    setError("");
+    if (!apiMode && !confirmOverlap) {
+      const zone = currentUser.timezone || "Europe/Kyiv";
+      const conflict = calendarEntries(events, tasks, currentUser.id, zone).some(
+        (item) =>
+          item.id !== event?.id &&
+          (item.ownerId === "me" || item.ownerId === currentUser.id ||
+            item.participantIds.includes("me") || item.participantIds.includes(currentUser.id)) &&
+          `${item.date}T${item.start}` < end &&
+          `${item.endDate || item.date}T${item.end}` > start,
+      );
+      if (conflict) {
+        setOverlap("У цей час у твоєму календарі вже є запланована подія. Ти можеш створити нову подію попри накладку або вибрати інший час.");
+        return;
+      }
+    }
+    savingRef.current = true;
     setSaving(true);
     try {
+      if (apiMode && !event) requestId.current ??= crypto.randomUUID();
+      const saved = {
+        ...form,
+        id: event?.id ?? requestId.current ?? `e-${Date.now()}`,
+        ...(apiMode ? { requestId: requestId.current, confirmOverlap } : {}),
+      };
       if (event)
-        await setEvents(
-          events.map((item) => (item.id === event.id ? { ...form, id: event.id } : item)),
-        );
-      else await setEvents([...events, { ...form, id: `e-${Date.now()}` }]);
+        await setEvents((items) => items.map((item) => (item.id === event.id ? saved : item)));
+      else await setEvents((items) => items.some((item) => item.id === saved.id) ? items : [...items, saved]);
       onSaved(event ? "Подію оновлено" : "Подію додано до календаря");
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Помилка збереження.");
+      if (isEventOverlap(e)) setOverlap(e.message);
+      else setError(e instanceof Error ? e.message : "Помилка збереження.");
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   };
@@ -189,8 +222,27 @@ export function EventModal({
       setError(e instanceof Error ? e.message : "Помилка видалення.");
     }
   };
+  if (overlap)
+    return (
+      <Modal title="Накладка в календарі" onClose={saving ? () => undefined : onClose} wide>
+        <p role="alert">{overlap}</p>
+        {error && <p className="form-error">{error}</p>}
+        <div className="modal-actions">
+          <Button variant="ghost" onClick={onClose} disabled={saving}>Скасувати</Button>
+          <Button variant="secondary" onClick={() => {
+            setOverlap("");
+            setError("");
+          }} disabled={saving}>
+            Обрати інший час
+          </Button>
+          <Button onClick={() => void save(true)} disabled={saving}>
+            {saving ? "Зберігаємо…" : event ? "Зберегти попри накладку" : "Створити попри накладку"}
+          </Button>
+        </div>
+      </Modal>
+    );
   return (
-    <Modal title={event ? "Редагувати подію" : "Нова подія"} onClose={onClose} wide>
+    <Modal title={event ? "Редагувати подію" : "Нова подія"} onClose={saving ? () => undefined : onClose} wide>
       <div className="form-grid">
         <label className="field span-2">
           <span>Назва</span>
@@ -296,15 +348,15 @@ export function EventModal({
       {error && <p className="form-error">{error}</p>}
       <div className="modal-actions">
         {event && canEdit && (
-          <Button variant="danger" icon="trash" onClick={remove}>
+          <Button variant="danger" icon="trash" onClick={remove} disabled={saving}>
             Видалити
           </Button>
         )}
         <span />
-        <Button variant="ghost" onClick={onClose}>
+        <Button variant="ghost" onClick={onClose} disabled={saving}>
           Скасувати
         </Button>
-        <Button disabled={!canEdit || saving} onClick={save}>
+        <Button disabled={!canEdit || saving} onClick={() => void save()}>
           {event ? "Зберегти" : "Створити подію"}
         </Button>
       </div>
