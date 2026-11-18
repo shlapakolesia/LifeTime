@@ -10,15 +10,25 @@ import { Prisma } from "@prisma/client";
 import { config } from "./config/index.js";
 import { db } from "./services/database.js";
 import { authenticate, admin, type AccessTokenVerifier } from "./middleware/auth.js";
-import { availabilityInput, eventInput, taskInput, profileInput, id } from "./validators/index.js";
+import { availabilityInput, eventInput, eventWriteInput, taskInput, profileInput, id } from "./validators/index.js";
 import {
   HttpError,
   findAvailability,
   getBusy,
+  personalAvailability,
   requireAvailability,
 } from "./services/availability.js";
 import { storage, validateImage } from "./services/storage.js";
-import { createAiProvider, type AiProvider } from "./services/ai.js";
+import { availabilityDate, createAiProvider, resolveAvailabilityDate, type AiProvider } from "./services/ai.js";
+
+const overlapWarning =
+  "У цей час у твоєму календарі вже є запланована подія. Ти можеш створити нову подію попри накладку або вибрати інший час.";
+
+class EventOverlap extends HttpError {
+  constructor() {
+    super(409, overlapWarning);
+  }
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -97,31 +107,45 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
     });
     res.json(events);
   });
+  async function checkEventTime(
+    userId: string,
+    participants: string[],
+    input: z.infer<typeof eventInput>,
+    client: Prisma.TransactionClient,
+    eventId?: string,
+  ) {
+    await requireAvailability(userId, participants, client);
+    const start = new Date(input.startsAt);
+    const end = new Date(input.endsAt);
+    if (participants.length && (await getBusy(participants, start, end, client, { eventId })).length)
+      throw new HttpError(409, "Хтось із запрошених зайнятий у цей час. Обери інший час.");
+    return (await getBusy([userId], start, end, client, { eventId })).length > 0;
+  }
   async function saveEvent(userId: string, body: unknown, eventId?: string) {
-    const input = eventInput.parse(body);
-    if (eventId) {
-      const old = await db.calendarEvent.findUnique({ where: { id: id.parse(eventId) } });
-      if (!old) throw new HttpError(404, "Подію не знайдено.");
-      if (old.ownerId !== userId) throw new HttpError(403, "Лише власник може змінити подію.");
-    }
+    const input = eventWriteInput.parse(body);
+    if (eventId) id.parse(eventId);
     const participants = [...new Set(input.participantIds)].filter((i) => i !== userId);
-    await requireAvailability(userId, participants);
-    const { participantIds: _, recheckAvailability, ...data } = input;
-    // Serializable transaction and ordered per-user locks prevent concurrent confirmed slots from racing.
+    const { participantIds: _, recheckAvailability: _legacyCheck, confirmOverlap, requestId, ...data } = input;
+    if (confirmOverlap && !eventId && !requestId)
+      throw new HttpError(400, "Для підтвердження накладки потрібен ідентифікатор запиту.");
+    // The lock statement can start before the previous writer commits. ReadCommitted gives
+    // the subsequent availability and idempotency checks a fresh snapshot after the wait.
     return db.$transaction(
       async (tx) => {
         for (const participant of [userId, ...participants].sort())
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${participant}))`;
-        if (recheckAvailability) {
-          const busy = await getBusy(
-            [userId, ...participants],
-            new Date(data.startsAt),
-            new Date(data.endsAt),
-            tx as typeof db,
-            { eventId },
-          );
-          if (busy.length) throw new HttpError(409, "Час уже зайнятий. Повторіть пошук.");
+        if (eventId || requestId) {
+          const existing = await tx.calendarEvent.findUnique({
+            where: { id: eventId ?? requestId },
+            include: { participants: true },
+          });
+          if (eventId && !existing) throw new HttpError(404, "Подію не знайдено.");
+          if (existing && existing.ownerId !== userId)
+            throw new HttpError(403, "Лише власник може змінити подію.");
+          if (!eventId && existing) return existing;
         }
+        if ((await checkEventTime(userId, participants, input, tx, eventId)) && !confirmOverlap)
+          throw new EventOverlap();
         const relations = { create: participants.map((userId) => ({ userId })) };
         const before = eventId
           ? (await tx.eventParticipant.findMany({ where: { eventId } })).map((p) => p.userId)
@@ -133,7 +157,7 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
               include: { participants: true },
             })
           : await tx.calendarEvent.create({
-              data: { ...data, ownerId: userId, participants: relations },
+              data: { ...data, id: requestId, ownerId: userId, participants: relations },
               include: { participants: true },
             });
         const invited = participants.filter((uid) => !before.includes(uid));
@@ -155,7 +179,7 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
         }
         return saved;
       },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
     );
   }
   app.post("/api/events", async (req, res) =>
@@ -212,6 +236,7 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
   });
   async function saveTask(userId: string, body: unknown, taskId?: string) {
     const data = taskInput.parse(body);
+    // Share the event writer's per-user lock and read committed state after any wait.
     return db.$transaction(
       async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
@@ -224,7 +249,7 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
             [userId],
             new Date(data.scheduledStart),
             new Date(data.scheduledEnd),
-            tx as typeof db,
+            tx,
             { taskId },
           );
           if (busy.length) throw new HttpError(409, "Запланований час уже зайнятий.");
@@ -233,7 +258,7 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
           ? tx.task.update({ where: { id: taskId }, data })
           : tx.task.create({ data: { ...data, ownerId: userId } });
       },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
     );
   }
   app.post("/api/tasks", async (req, res) =>
@@ -703,7 +728,8 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
         name: `${f.friend.profile?.firstName ?? ""} ${f.friend.profile?.lastName ?? ""}`.trim(),
       }))
       .filter((f) => f.name);
-    const nowIso = DateTime.now().setZone(zone).toISO({ suppressMilliseconds: true }) ?? new Date().toISOString();
+    const now = DateTime.now().setZone(zone);
+    const nowIso = now.toISO({ suppressMilliseconds: true }) ?? new Date().toISOString();
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30_000);
     let raw;
@@ -719,6 +745,27 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
       res.json({ type: "clarification", message: raw.message });
       return;
     }
+    if (raw.type === "availability") {
+      const { type, ...dates } = raw;
+      if (!user.profile || !now.isValid)
+        throw new HttpError(503, "Не вдалося отримати налаштування календаря.");
+      const range = resolveAvailabilityDate(availabilityDate.parse(dates), now);
+      const availability = await personalAvailability(req.userId, range, user.profile).catch(() => {
+        throw new HttpError(503, "Не вдалося завантажити календар. Спробуй ще раз трохи пізніше.");
+      });
+      const lines = availability.days.map(({ date, free }) => {
+        const label = DateTime.fromISO(date, { zone }).setLocale("uk").toFormat("d MMMM yyyy");
+        const times = free.map(({ start, end }) => `${start}–${end}`).join(", ");
+        return times ? `${label}: ${times}.` : `${label}: вільного часу немає.`;
+      });
+      res.json({
+        type,
+        availability,
+        message: `Вільний час у межах активних годин (${availability.timezone}):
+${lines.join("\n")}`,
+      });
+      return;
+    }
     const parsed = aiProposal.safeParse(raw.proposal);
     if (!parsed.success) {
       res.json({
@@ -728,12 +775,20 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
       return;
     }
     const proposal = parsed.data;
+    let overlap = false;
     if (proposal.kind === "event") {
       const allowed = new Set(friends.map((f) => f.id));
       proposal.data.participantIds = proposal.data.participantIds.filter((pid) => allowed.has(pid));
       proposal.data.timezone = zone;
+      const participants = [...new Set(proposal.data.participantIds)].filter((pid) => pid !== req.userId);
+      overlap = await checkEventTime(req.userId, participants, proposal.data, db);
     }
-    res.json({ type: "proposal", message: raw.message, proposal });
+    res.json({
+      type: "proposal",
+      message: overlap ? overlapWarning : raw.message,
+      proposal,
+      overlap,
+    });
   });
   app.get("/api/ai/context", async (req, res) =>
     res.json({
@@ -756,7 +811,7 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
   app.post("/api/ai/proposals/confirm", async (req, res) => {
     const proposal = z
       .discriminatedUnion("kind", [
-        z.object({ kind: z.literal("event"), data: eventInput }),
+        z.object({ kind: z.literal("event"), data: eventWriteInput }),
         z.object({ kind: z.literal("task"), data: taskInput }),
       ])
       .parse(req.body);
@@ -764,7 +819,7 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
       .status(201)
       .json(
         proposal.kind === "event"
-          ? await saveEvent(req.userId, { ...proposal.data, recheckAvailability: true })
+          ? await saveEvent(req.userId, proposal.data)
           : await saveTask(req.userId, proposal.data),
       );
   });
@@ -777,6 +832,10 @@ export function createApp(verifier?: AccessTokenVerifier, aiProvider?: AiProvide
       }
       if (error instanceof ZodError) {
         res.status(400).json({ message: "Некоректні дані.", issues: error.issues });
+        return;
+      }
+      if (error instanceof EventOverlap) {
+        res.status(409).json({ code: "EVENT_OVERLAP", message: error.message });
         return;
       }
       if (error instanceof HttpError) {

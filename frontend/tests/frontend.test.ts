@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { toInstant, eventDto } from "../src/services/dto.ts";
-import { calendarEntries, onCalendarDate } from "../src/services/calendarView.ts";
+import { calendarEntries, onCalendarDate, placeCalendarEntries } from "../src/services/calendarView.ts";
 
 test("wall time converts using IANA zone, including DST", () => {
   assert.equal(toInstant("2027-01-15", "14:00", "Europe/Kyiv"), "2027-01-15T12:00:00.000Z");
@@ -56,4 +56,23 @@ test("task sessions are projected without creating duplicate calendar records", 
   assert.equal(entries.length, 1);
   assert.equal(entries[0].sourceTaskId, "t");
   assert.equal(entries[0].start, "14:00");
+});
+
+test("overlapping calendar blocks are both visible and unrelated blocks keep full width", () => {
+  const event = eventDto({
+    id: "original", ownerId: "me", title: "Лекція", description: "",
+    startsAt: "2026-11-18T12:00:00Z", endsAt: "2026-11-18T14:00:00Z",
+    timezone: "Europe/Kyiv", category: "Навчання", location: "", privacy: "private",
+    participants: [],
+  }, "me", "Europe/Kyiv");
+  const blocks = placeCalendarEntries([
+    { ...event, id: "overlap", start: "15:00", end: "18:00" },
+    { ...event, id: "later", start: "18:00", end: "19:00" },
+    event,
+  ]);
+  assert.deepEqual(blocks.map(({ event, column, columns }) => [event.id, column, columns]), [
+    ["original", 0, 2],
+    ["overlap", 1, 2],
+    ["later", 0, 1],
+  ]);
 });

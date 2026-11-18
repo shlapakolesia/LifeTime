@@ -6,12 +6,20 @@ import type { ApiErrorShape } from "../types";
 export class ApiClientError extends Error implements ApiErrorShape {
   status: number;
   code: ApiErrorShape["code"];
-  constructor(status: number, code: ApiErrorShape["code"], message: string) {
+  constructor(
+    status: number,
+    code: ApiErrorShape["code"],
+    message: string,
+    readonly reason?: string,
+  ) {
     super(message);
     this.status = status;
     this.code = code;
   }
 }
+
+export const isEventOverlap = (error: unknown): error is ApiClientError =>
+  error instanceof ApiClientError && error.status === 409 && error.reason === "EVENT_OVERLAP";
 
 export interface TokenProvider {
   getAccessToken(): Promise<string | null>;
@@ -53,6 +61,7 @@ export class ApiClient {
             : response.status === 401
               ? "Не вдалося увійти. Перевірте акаунт або зареєструйтеся."
               : "Не вдалося виконати запит. Спробуйте ще раз.",
+          typeof body?.code === "string" ? body.code : undefined,
         );
       }
       return response.status === 204 ? (undefined as T) : response.json();

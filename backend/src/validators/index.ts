@@ -23,6 +23,20 @@ export const eventInput = z
   })
   .strict()
   .refine((v) => Date.parse(v.endsAt) > Date.parse(v.startsAt), "Invalid event interval");
+export const eventWriteInput = eventInput.safeExtend({
+  confirmOverlap: z.boolean().default(false),
+  requestId: z.uuidv4().optional(),
+});
+
+export const calendarRange = z
+  .object({ startDate: z.iso.date(), endDate: z.iso.date() })
+  .strict()
+  .refine(
+    ({ startDate, endDate }) =>
+      endDate >= startDate && Date.parse(endDate) - Date.parse(startDate) <= 31 * 86400000,
+    "Range must be 0–31 days",
+  );
+
 export const taskInput = z
   .object({
     title: z.string().trim().min(1).max(200),

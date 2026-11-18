@@ -1,4 +1,4 @@
-import { calendarEntries, onCalendarDate } from "../services/calendarView";
+import { calendarEntries, onCalendarDate, placeCalendarEntries } from "../services/calendarView";
 import { useEffect, useMemo, useState } from "react";
 import { addDays, dateFromIso, formatDate, iso, minutes, timeFromMinutes, weekday } from "../data";
 import { useStore } from "../store";
@@ -460,18 +460,22 @@ export function CalendarPage({
                 {Array.from({ length: 14 }, (_, i) => (
                   <i key={i} />
                 ))}
-                {own
-                  .map((e) => onCalendarDate(e, iso(d)))
-                  .filter((e): e is CalendarEvent => Boolean(e))
-                  .map((e) => (
+                {placeCalendarEntries(
+                  own.map((e) => onCalendarDate(e, iso(d)))
+                    .filter((e): e is CalendarEvent => Boolean(e)),
+                ).map(({ event: e, top, height, column, columns }) => (
                     <button
                       key={e.id}
                       className="grid-event"
                       onClick={() => openEntry(e)}
                       style={
                         {
-                          top: `${Math.max(0, ((minutes(e.start) - 480) / 840) * 100)}%`,
-                          height: `${Math.max(5, ((minutes(e.end) - minutes(e.start)) / 840) * 100)}%`,
+                          top: `${top}%`,
+                          height: `${height}%`,
+                          ...(columns > 1 ? {
+                            left: `${5 + (column * 90) / columns}%`,
+                            width: `${90 / columns}%`,
+                          } : {}),
                           "--event": eventColor[e.category],
                         } as React.CSSProperties
                       }

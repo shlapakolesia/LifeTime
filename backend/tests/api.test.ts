@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import request from "supertest";
+import request, { type Response } from "supertest";
 import sharp from "sharp";
 import { randomUUID } from "node:crypto";
 import { createApp } from "../src/app.js";
 import { db } from "../src/services/database.js";
-import { DateTime } from "luxon";
+import { DateTime, Settings } from "luxon";
 const app = createApp();
 test("API rejects unauthenticated sensitive requests", async () => {
   for (const route of [
@@ -304,3 +304,218 @@ test(
 test.after(async () => {
   await db.$disconnect();
 });
+
+test(
+  "AI reads the authenticated calendar and event overlap confirmation persists exactly once",
+  { skip: process.env.RUN_DB_TESTS !== "true" },
+  async (t) => {
+    const previousNow = Settings.now;
+    Settings.now = () => Date.parse("2026-11-17T11:00:00Z");
+    t.after(() => { Settings.now = previousNow; });
+    const zone = "Pacific/Kiritimati";
+    const day = "2026-11-18";
+    const makeUser = async (premiumStatus: string) => {
+      const email = `calendar-${randomUUID()}@lifetime.local`;
+      return db.user.create({
+        data: {
+          email,
+          subject: `local:${email}`,
+          premiumStatus,
+          profile: { create: {
+            firstName: "Тест", lastName: "Календар", timezone: zone,
+            activeStart: "09:00", activeEnd: "20:00",
+          } },
+        },
+      });
+    };
+    const a = await makeUser("premium");
+    const b = await makeUser("free");
+    const original = {
+      title: "Подія через північ",
+      startsAt: "2026-11-17T09:00:00Z",
+      endsAt: "2026-11-17T20:00:00Z",
+      timezone: zone,
+    };
+    const overlap = {
+      ...original,
+      title: "Зустріч",
+      startsAt: "2026-11-17T19:30:00Z",
+      endsAt: "2026-11-17T21:00:00Z",
+      requestId: randomUUID(),
+    };
+    const editable = {
+      ...original,
+      title: "Редагована подія",
+      startsAt: "2026-11-19T03:00:00Z",
+      endsAt: "2026-11-19T04:00:00Z",
+    };
+    const aiApp = createApp(undefined, {
+      name: "integration-contract",
+      async interpret(context) {
+        assert.equal(context.timezone, zone);
+        assert.match(context.nowIso, /\+14:00$/);
+        if (context.text === "Заплануй зустріч") {
+          const { requestId: _, ...data } = overlap;
+          return { type: "proposal", message: "Перевір подію.", proposal: { kind: "event", data } };
+        }
+        assert.match(context.text, /Коли я вільна 18 листопада/);
+        return context.text.includes("2026")
+          ? { type: "availability", startDate: day, endDate: "2026-11-19" }
+          : { type: "availability", month: 11, day: 18 };
+      },
+    });
+    const as = (user: typeof a) => `Bearer dev:${user.email}`;
+    const create = (body: object, user = a) =>
+      request(aiApp).post("/api/events").set("Authorization", as(user)).send(body);
+    const list = () => request(aiApp).get("/api/events").set("Authorization", as(a)).expect(200);
+    const ask = (text: string, user = a, extra = {}) =>
+      request(aiApp).post("/api/ai/interpret").set("Authorization", as(user)).send({ text, ...extra });
+    const confirm = (data: unknown) =>
+      request(aiApp).post("/api/ai/proposals/confirm").set("Authorization", as(a)).send({ kind: "event", data });
+    const query = "Коли я вільна 18 листопада?";
+    await request(aiApp).post("/api/ai/interpret").send({ text: query }).expect(401);
+    await ask(query, b).expect(403);
+    await ask(query, a, { userId: b.id }).expect(400);
+
+    const first = (await create(original).expect(201)).body;
+    const edit = (await create(editable).expect(201)).body;
+    await create({ ...overlap, requestId: randomUUID(), title: "Приватна подія іншого користувача",
+      startsAt: "2026-11-17T21:00:00Z", endsAt: "2026-11-17T22:00:00Z" }, b).expect(201);
+    await request(aiApp).post("/api/tasks").set("Authorization", as(a)).send({
+      title: "Фокус-сесія",
+      scheduledStart: "2026-11-18T00:00:00Z",
+      scheduledEnd: "2026-11-18T02:00:00Z",
+    }).expect(201);
+
+    const warning = await create(overlap).expect(409);
+    assert.equal(warning.body.code, "EVENT_OVERLAP");
+    assert.match(warning.body.message, /попри накладку/);
+    assert.equal((await list()).body.length, 2); // warning followed by cancel makes no write
+    await create({ ...overlap, requestId: undefined, confirmOverlap: true }).expect(400);
+    const retries = await Promise.all(
+      Array.from({ length: 2 }, () => create({ ...overlap, confirmOverlap: true }).expect(201)),
+    );
+    for (const retry of retries) assert.equal(retry.body.id, overlap.requestId);
+    assert.deepEqual(new Set((await list()).body.map((row: { id: string }) => row.id)),
+      new Set([first.id, edit.id, overlap.requestId]));
+
+    const update = (data: object, user = a) => request(aiApp)
+      .put(`/api/events/${edit.id}`).set("Authorization", as(user)).send(data);
+    const moved = { ...editable, startsAt: overlap.startsAt, endsAt: overlap.endsAt };
+    await update(moved).expect(409, { code: "EVENT_OVERLAP", message: warning.body.message });
+    assert.equal((await list()).body.find((row: { id: string }) => row.id === edit.id).startsAt,
+      "2026-11-19T03:00:00.000Z");
+    await update({ ...moved, confirmOverlap: true }, b).expect(403);
+    await update({ ...moved, confirmOverlap: true }).expect(200);
+    assert.equal((await list()).body.find((row: { id: string }) => row.id === first.id).title, original.title);
+
+    const proposal = (await ask("Заплануй зустріч").expect(200)).body;
+    assert.equal(proposal.overlap, true);
+    assert.equal((await list()).body.length, 3);
+    const pending = { ...proposal.proposal.data, requestId: randomUUID() };
+    await confirm(pending).expect(409);
+    await confirm({ ...pending, confirmOverlap: true }).expect(201);
+    await confirm({ ...pending, confirmOverlap: true }).expect(201);
+    assert.equal((await list()).body.length, 4);
+
+    await create({ ...overlap, requestId: randomUUID(), participantIds: [b.id], confirmOverlap: true }).expect(403);
+    await db.friendship.create({ data: { ownerId: b.id, friendId: a.id } });
+    await create({ ...overlap, requestId: randomUUID(), participantIds: [b.id], confirmOverlap: true,
+      startsAt: "2026-11-17T21:30:00Z", endsAt: "2026-11-17T22:30:00Z" })
+      .expect(409).expect(({ body }) => assert.notEqual(body.code, "EVENT_OVERLAP"));
+
+    const single = (await ask(query).expect(200)).body;
+    assert.deepEqual(single.availability.days.map(({ date }: { date: string }) => date), [day]);
+    const answer = (await ask("Коли я вільна 18 листопада 2026 і 19 листопада?").expect(200)).body;
+    assert.deepEqual(answer.availability, {
+      timezone: zone, activeStart: "09:00", activeEnd: "20:00",
+      days: [
+        { date: day, free: [{ start: "11:00", end: "14:00" }, { start: "16:00", end: "20:00" }] },
+        { date: "2026-11-19", free: [{ start: "09:00", end: "20:00" }] },
+      ],
+    });
+    assert.match(answer.message, /18 листопада 2026: 11:00–14:00, 16:00–20:00/);
+    assert.doesNotMatch(JSON.stringify(answer), /Приватна подія|Фокус-сесія|Подія через північ/);
+    const findMany = db.calendarEvent.findMany;
+    t.after(() => { db.calendarEvent.findMany = findMany; });
+    db.calendarEvent.findMany = () => { throw new Error("Calendar database unavailable"); };
+    const failure = (await ask(query).expect(503)).body;
+    assert.match(failure.message, /Не вдалося завантажити календар/);
+    assert.equal(failure.availability, undefined);
+  },
+);
+
+for (const { name, first, second, repeated = false } of [
+  { name: "event then event", first: "events", second: "events" },
+  { name: "event then scheduled task", first: "events", second: "tasks" },
+  { name: "scheduled task then event", first: "tasks", second: "events" },
+  { name: "scheduled task then scheduled task", first: "tasks", second: "tasks" },
+  { name: "repeated event confirmation", first: "events", second: "events", repeated: true },
+]) {
+  test(`calendar writes queued on the same advisory lock: ${name}`, {
+    skip: process.env.RUN_DB_TESTS !== "true",
+  }, async () => {
+    const email = `concurrency-${randomUUID()}@lifetime.local`;
+    const user = await db.user.create({
+      data: { email, subject: `local:${email}`, premiumStatus: "premium" },
+    });
+    const startsAt = "2026-11-18T12:00:00Z";
+    const endsAt = "2026-11-18T13:00:00Z";
+    const event = { title: "Подія", timezone: "Europe/Kyiv", startsAt, endsAt };
+    const task = { title: "Сесія", scheduledStart: startsAt, scheduledEnd: endsAt };
+    const requestId = randomUUID();
+    const post = (path: string, data: object) =>
+      request(app).post(path).set("Authorization", `Bearer dev:${email}`).send(data);
+    if (repeated) await post("/api/events", event).expect(201);
+    const write = (resource: string) => repeated
+      ? post("/api/ai/proposals/confirm", {
+          kind: "event",
+          data: { ...event, requestId, confirmOverlap: true },
+        })
+      : post(`/api/${resource}`, resource === "events" ? event : task);
+
+    const responses: Promise<Response>[] = [];
+    try {
+      await db.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${user.id}))`;
+        for (const resource of [first, second]) {
+          responses.push(write(resource).then((response) => response));
+          const deadline = Date.now() + 2500;
+          let waiting = 0;
+          // Observe each request waiting in PostgreSQL before releasing the lock.
+          while (Date.now() < deadline && waiting < responses.length) {
+            const [locks] = await tx.$queryRaw<{ waiting: number }[]>`
+              SELECT count(*)::int AS waiting FROM pg_locks
+              WHERE locktype = 'advisory' AND NOT granted AND objsubid = 1
+                AND objid::bigint = (hashtext(${user.id})::bigint & 4294967295)
+            `;
+            waiting = locks.waiting;
+            if (waiting < responses.length) await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+          assert.equal(waiting, responses.length, "each write must wait for the owner's lock");
+        }
+      }, { timeout: 8000 });
+    } catch (error) {
+      await Promise.allSettled(responses);
+      throw error;
+    }
+
+    const [winner, follower] = await Promise.all(responses);
+    assert.equal(winner.status, 201);
+    if (repeated) {
+      assert.equal(follower.status, 201);
+      assert.equal(winner.body.id, requestId);
+      assert.equal(follower.body.id, requestId);
+    } else {
+      assert.equal(follower.status, 409);
+      if (second === "events") assert.equal(follower.body.code, "EVENT_OVERLAP");
+      else assert.equal(follower.body.message, "Запланований час уже зайнятий.");
+    }
+    const [events, tasks] = await Promise.all([
+      db.calendarEvent.count({ where: { ownerId: user.id } }),
+      db.task.count({ where: { ownerId: user.id } }),
+    ]);
+    assert.equal(events, repeated ? 2 : Number(first === "events"));
+    assert.equal(tasks, Number(first === "tasks"));
+  });
+}
